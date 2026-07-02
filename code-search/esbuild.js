@@ -1,7 +1,16 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
+const { execSync } = require('child_process');
+const path = require('path');
 
 const watch = process.argv.includes('--watch');
+
+function generateIndexThreadsSchema() {
+  execSync('node scripts/generate-index-threads-schema.js', {
+    cwd: path.join(__dirname),
+    stdio: 'inherit',
+  });
+}
 
 const extOptions = {
   entryPoints: ['src/extension.ts'],
@@ -50,6 +59,7 @@ const manageWebviewOptions = {
 };
 
 async function build() {
+  generateIndexThreadsSchema();
   fs.mkdirSync('dist/webview', { recursive: true });
   await esbuild.build(extOptions);
   await esbuild.build(cliOptions);
@@ -59,6 +69,7 @@ async function build() {
 }
 
 async function watchBuild() {
+  generateIndexThreadsSchema();
   fs.mkdirSync('dist/webview', { recursive: true });
   const extCtx = await esbuild.context(extOptions);
   const cliCtx = await esbuild.context(cliOptions);

@@ -44,7 +44,7 @@ node "$SCRIPT_DIR/scripts/rebuild-electron.js" vscode
 echo
 echo "[3/3] Optional: rebuild for CLI on system Node.js"
 echo "      Skip this if you only use the VS Code extension."
-npm rebuild better-sqlite3 || echo "[WARN] System Node rebuild failed. CLI (ess) may not work; extension is unaffected."
+node "$SCRIPT_DIR/scripts/rebuild-node.js" || echo "[WARN] System Node rebuild failed. CLI (ess) may not work; extension is unaffected."
 
 echo
 echo "========================================"

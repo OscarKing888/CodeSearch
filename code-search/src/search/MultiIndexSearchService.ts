@@ -1,4 +1,5 @@
 import { IndexManager } from '../index/IndexManager';
+import { isBinaryExtension } from '../index/FileScanner';
 import { SearchService, getRelativePath } from './SearchService';
 import { SearchHit, SearchOptions, SearchResult } from '../types';
 
@@ -55,6 +56,9 @@ export class MultiIndexSearchService {
 
       for (const hit of result.hits) {
         const localPath = this.indexManager.mapHitPath(indexService.id, hit.path);
+        if (isBinaryExtension(localPath)) {
+          continue;
+        }
         const key = `${localPath}:${hit.line}:${hit.matchStart}`;
         if (fileSet.has(key)) {
           continue;

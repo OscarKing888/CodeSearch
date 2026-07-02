@@ -149,7 +149,16 @@
             "**/Intermediate/**",
             "**/Saved/**",
             "**/Binaries/**",
-            "**/DerivedDataCache/**"
+            "**/DerivedDataCache/**",
+            "**/DerivedData/**",
+            "**/Build/**",
+            "**/Staging/**",
+            "**/ShaderCache/**",
+            "**/ShaderDebugInfo/**",
+            "**/AutomationReports/**",
+            "**/Packaging/**",
+            "**/enc_temp_folder/**",
+            "**/WebCache/**"
           ],
           "description": "Glob patterns to exclude from indexing (full path)"
         },
@@ -171,7 +180,16 @@
             "Saved",
             "Binaries",
             "DerivedDataCache",
-            "DerivedData"
+            "DerivedData",
+            "Build",
+            "Staging",
+            "ShaderCache",
+            "ShaderDebugInfo",
+            "AutomationReports",
+            "Packaging",
+            "enc_temp_folder",
+            "WebCache",
+            "Content"
           ],
           "description": "Directory segment names to exclude at any depth (supports wildcards)"
         },
@@ -186,7 +204,14 @@
             "*.so",
             "*.dylib",
             "*.cache",
-            "*.min.js"
+            "*.min.js",
+            "*.uasset",
+            "*.umap",
+            "*.ubulk",
+            "*.uexp",
+            "*.ucas",
+            "*.utoc",
+            "*.uptodate"
           ],
           "description": "File base names to exclude (supports wildcards)"
         },
@@ -243,6 +268,65 @@
           "minimum": 1,
           "maximum": 500,
           "description": "Default token gap for loose phrase search"
+        },
+        "codeSearch.indexThreads": {
+          "type": "number",
+          "default": 0,
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24
+          ],
+          "enumItemLabels": [
+            "自动（本机 24 线程）",
+            "1 线程",
+            "2 线程",
+            "3 线程",
+            "4 线程",
+            "5 线程",
+            "6 线程",
+            "7 线程",
+            "8 线程",
+            "9 线程",
+            "10 线程",
+            "11 线程",
+            "12 线程",
+            "13 线程",
+            "14 线程",
+            "15 线程",
+            "16 线程",
+            "17 线程",
+            "18 线程",
+            "19 线程",
+            "20 线程",
+            "21 线程",
+            "22 线程",
+            "23 线程",
+            "24 线程（全部）"
+          ],
+          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (24 detected at build time; runtime auto always uses live CPU count)."
         }
       }
     }
@@ -254,8 +338,10 @@
     "rebuild:electron": "node scripts/rebuild-electron.js",
     "rebuild:electron:vscode": "node scripts/rebuild-electron.js vscode",
     "rebuild:electron:cursor": "node scripts/rebuild-electron.js cursor",
+    "rebuild:node": "node scripts/rebuild-node.js",
     "package": "vsce package",
-    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts",
+    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/purgeStaleEntries.test.ts",
+    "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js"
   },
   "bin": {

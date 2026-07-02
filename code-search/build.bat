@@ -24,15 +24,7 @@ if not exist "node_modules\" (
     echo.
 )
 
-echo [1/4] Rebuilding better-sqlite3 for editor Electron...
-node "%~dp0scripts\rebuild-electron.js" %TARGET%
-if errorlevel 1 (
-    echo [ERROR] Electron rebuild failed.
-    exit /b 1
-)
-
-echo.
-echo [2/4] Building extension (esbuild)...
+echo [1/4] Building extension (esbuild)...
 call npm run build
 if errorlevel 1 (
     echo.
@@ -41,11 +33,24 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/4] Running tests...
+echo [2/4] Running tests...
+node "%~dp0scripts\rebuild-node.js"
+if errorlevel 1 (
+    echo [ERROR] better-sqlite3 rebuild for system Node failed.
+    exit /b 1
+)
 call npm test
 if errorlevel 1 (
     echo.
     echo [ERROR] Tests failed.
+    exit /b 1
+)
+
+echo.
+echo [3/4] Rebuilding better-sqlite3 for editor Electron...
+node "%~dp0scripts\rebuild-electron.js" %TARGET%
+if errorlevel 1 (
+    echo [ERROR] Electron rebuild failed.
     exit /b 1
 )
 
@@ -77,3 +82,5 @@ echo  Debug: open this folder in VS Code and press F5
 echo  Install: run 安装CodeSearch.bat
 echo ========================================
 exit /b 0
+
+call "%~dp0安装CodeSearch.bat"

@@ -5,8 +5,17 @@ import { EventEmitter } from 'events';
 import { getIndexingSettings } from '../indexingSettings';
 import { FileRecord, IndexProgress, IndexStatus } from '../types';
 import { mergeIndexingSettings, PerIndexExcludes } from './excludePatterns';
-import { extractTokens, readFileForIndex, shouldIndexFile, walkDirectory } from './FileScanner';
+import {
+  extractTokens,
+  readFileForIndex,
+  shouldIndexFile,
+  shouldPathRemainInIndex,
+  walkDirectory,
+} from './FileScanner';
+import { IndexingSettings } from '../indexingSettings';
 import { FileWatcher } from './FileWatcher';
+import { mapWithConcurrency } from './concurrency';
+import { resolveIndexThreadCount } from './threadCount';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS files (
@@ -49,6 +58,8 @@ export class IndexService extends EventEmitter {
   private queued = 0;
   private indexed = 0;
   private total = 0;
+  private scanned = 0;
+  private activeThreadCount = 1;
 
   private insertFileStmt: Database.Statement | undefined;
   private updateFileStmt: Database.Statement | undefined;
@@ -144,18 +155,23 @@ export class IndexService extends EventEmitter {
   }
 
   getProgress(): IndexProgress {
-    const pct = this.total > 0 ? Math.round((this.indexed / this.total) * 100) : 100;
     let message = 'Up to date';
     if (this.status === 'scanning') {
-      message = 'Scanning...';
+      message = `Scanning ${this.scanned} files...`;
     } else if (this.status === 'indexing') {
-      message = `Indexing... ${pct}%`;
+      const threadHint =
+        this.activeThreadCount > 1 ? ` (${this.activeThreadCount} threads)` : '';
+      message =
+        this.total > 0
+          ? `Indexing ${this.indexed}/${this.total} files${threadHint}...`
+          : 'Indexing...';
     }
     return {
       status: this.status,
       queued: this.queued,
       indexed: this.indexed,
       total: this.total,
+      scanned: this.scanned,
       message,
     };
   }
@@ -180,14 +196,23 @@ export class IndexService extends EventEmitter {
     this.setStatus('scanning');
     this.indexed = 0;
     this.queued = 0;
+    this.scanned = 0;
+    this.emit('progress', this.getProgress());
 
     const config = this.getEffectiveSettings();
-    const filesToIndex: string[] = [];
+    if (forceAll) {
+      await this.purgeStaleEntries(config);
+    }
+    const filesSet = new Set<string>();
 
     for (const root of this.rootDirs) {
       for await (const filePath of walkDirectory(root, config)) {
         if (this.paused) {
           await this.sleep(100);
+        }
+        this.scanned++;
+        if (this.scanned % 50 === 0) {
+          this.emit('progress', this.getProgress());
         }
         if (!forceAll) {
           const existing = this.getFileMtimeStmt?.get(filePath) as { mtime: number } | undefined;
@@ -202,36 +227,39 @@ export class IndexService extends EventEmitter {
             }
           }
         }
-        filesToIndex.push(filePath);
+        filesSet.add(filePath);
       }
     }
 
+    const filesToIndex = Array.from(filesSet);
+
+    this.emit('progress', this.getProgress());
     this.total = filesToIndex.length;
     this.queued = filesToIndex.length;
     this.setStatus('indexing');
 
+    const threadCount = resolveIndexThreadCount(config.indexThreads);
+    this.activeThreadCount = threadCount;
+
     for (let i = 0; i < filesToIndex.length; i += BATCH_SIZE) {
-      if (this.paused) {
+      while (this.paused) {
         await this.sleep(200);
-        i -= BATCH_SIZE;
-        continue;
       }
 
       const batch = filesToIndex.slice(i, i + BATCH_SIZE);
-      const records: FileRecord[] = [];
-
-      for (const filePath of batch) {
-        const record = await readFileForIndex(filePath);
-        if (record) {
-          records.push(record);
-        }
-      }
+      const results = await mapWithConcurrency(batch, threadCount, readFileForIndex, {
+        shouldPause: () => this.paused,
+        onPause: () => this.sleep(200),
+      });
+      const records = results.filter((r): r is FileRecord => r !== null);
 
       this.indexBatch(records);
       this.indexed += batch.length;
       this.queued = filesToIndex.length - this.indexed;
       this.emit('progress', this.getProgress());
     }
+
+    this.activeThreadCount = 1;
 
     this.setStatus('upToDate');
     this.indexing = false;
@@ -303,6 +331,19 @@ export class IndexService extends EventEmitter {
   removeFile(filePath: string): void {
     this.deleteFtsStmt?.run(filePath);
     this.deleteFileStmt?.run(filePath);
+  }
+
+  private async purgeStaleEntries(config: IndexingSettings): Promise<void> {
+    if (!this.db || this.readOnly) {
+      return;
+    }
+    const rows = this.db.prepare('SELECT path FROM files').all() as { path: string }[];
+    for (const { path: filePath } of rows) {
+      const remain = await shouldPathRemainInIndex(filePath, this.rootDirs, config);
+      if (!remain) {
+        this.removeFile(filePath);
+      }
+    }
   }
 
   private startWatcher(): void {

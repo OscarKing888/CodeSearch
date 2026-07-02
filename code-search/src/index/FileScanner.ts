@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { minimatch } from 'minimatch';
 import { IndexingSettings } from '../indexingSettings';
-import { isExcludedDir, isExcludedFile } from './excludePatterns';
+import { isExcludedDir, isExcludedFile, isPathIgnored } from './excludePatterns';
 import { FileRecord } from '../types';
 
 const TEXT_EXTENSIONS = new Set([
@@ -24,18 +24,45 @@ const TEXT_EXTENSIONS = new Set([
   '.gitignore', '.editorconfig', '.env',
 ]);
 
+export const BINARY_EXTENSIONS = new Set([
+  '.uasset', '.umap', '.ubulk', '.uexp', '.ucas', '.utoc', '.uptodate',
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.tga', '.dds', '.exr', '.hdr',
+  '.wav', '.mp3', '.ogg', '.flac', '.aac',
+  '.zip', '.rar', '.7z', '.gz', '.tar', '.bz2',
+  '.pdf', '.woff', '.woff2', '.ttf', '.otf', '.eot',
+  '.fbx', '.glb', '.gltf', '.blend',
+]);
+
+export function isBinaryExtension(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
+}
+
 export function isBinaryBuffer(buf: Buffer): boolean {
   if (buf.length === 0) {
     return false;
   }
-  const sample = buf.subarray(0, Math.min(512, buf.length));
+  const sample = buf.subarray(0, Math.min(8192, buf.length));
   let nullCount = 0;
+  let nonPrintable = 0;
   for (let i = 0; i < sample.length; i++) {
-    if (sample[i] === 0) {
+    const b = sample[i];
+    if (b === 0) {
       nullCount++;
     }
+    if (b < 9 || (b > 13 && b < 32) || b === 127) {
+      nonPrintable++;
+    }
   }
-  return nullCount / sample.length > 0.3;
+  if (nullCount / sample.length > 0.3) {
+    return true;
+  }
+  if (nonPrintable / sample.length > 0.3) {
+    return true;
+  }
+  const text = sample.toString('utf8');
+  const replacementCount = (text.match(/\uFFFD/g) || []).length;
+  return replacementCount > Math.max(4, sample.length * 0.05);
 }
 
 function normalizePath(p: string): string {
@@ -45,6 +72,38 @@ function normalizePath(p: string): string {
 function matchesAny(patterns: string[], filePath: string): boolean {
   const normalized = normalizePath(filePath);
   return patterns.some((pattern) => minimatch(normalized, pattern, { dot: true, nocase: process.platform === 'win32' }));
+}
+
+export function isUnderRoot(filePath: string, rootDirs: string[]): boolean {
+  const normalized = normalizePath(path.resolve(filePath));
+  return rootDirs.some((root) => {
+    const rootNorm = normalizePath(path.resolve(root));
+    const rootLower = rootNorm.toLowerCase();
+    const pathLower = normalized.toLowerCase();
+    return pathLower === rootLower || pathLower.startsWith(`${rootLower}/`);
+  });
+}
+
+export async function shouldPathRemainInIndex(
+  filePath: string,
+  rootDirs: string[],
+  config: IndexingSettings
+): Promise<boolean> {
+  if (!isUnderRoot(filePath, rootDirs)) {
+    return false;
+  }
+  if (isPathIgnored(filePath, config)) {
+    return false;
+  }
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) {
+      return false;
+    }
+    return shouldIndexFile(filePath, config, stat.size);
+  } catch {
+    return false;
+  }
 }
 
 export function shouldIndexFile(
@@ -57,6 +116,10 @@ export function shouldIndexFile(
   const basename = path.basename(filePath);
 
   if (sizeBytes > config.maxFileSizeKB * 1024) {
+    return false;
+  }
+
+  if (ext && BINARY_EXTENSIONS.has(ext)) {
     return false;
   }
 
@@ -89,6 +152,10 @@ export async function readFileForIndex(filePath: string): Promise<FileRecord | n
   try {
     const stat = await fs.promises.stat(filePath);
     if (!stat.isFile()) {
+      return null;
+    }
+
+    if (isBinaryExtension(filePath)) {
       return null;
     }
 

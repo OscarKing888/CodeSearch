@@ -14,31 +14,62 @@ import { MultiIndexSearchService } from './search/MultiIndexSearchService';
 import { SearchPanelProvider } from './ui/SearchPanelProvider';
 import { createStandaloneIndex, manageIndexes, openSecondaryIndex } from './ui/IndexManagement';
 import { IndexManagePanel } from './ui/IndexManagePanel';
+import { getLogicalCpuCount } from './index/threadCount';
 
 const CREATE_INDEX_LABEL = 'Create Index';
 const SKIP_INDEX_LABEL = 'Not Now';
+
+const INDEXING_CONFIG_KEYS = [
+  'codeSearch.excludeGlobs',
+  'codeSearch.excludeDirNames',
+  'codeSearch.excludeFileNames',
+  'codeSearch.includeGlobs',
+  'codeSearch.maxFileSizeKB',
+] as const;
+
+const INDEXING_SETTINGS_REFRESH_DEBOUNCE_MS = 500;
 
 let indexManager: IndexManager | undefined;
 let searchService: MultiIndexSearchService | undefined;
 let panelProvider: SearchPanelProvider | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
+let outputChannel: vscode.OutputChannel | undefined;
 let initPromise: Promise<void> | undefined;
 let initializedWorkspaceHash: string | undefined;
 let webviewRegistered = false;
 let progressListener: (() => void) | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
+let indexingSettingsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionContext = context;
+  logCpuInfo(context);
   registerCommands(context);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       void initializeWorkspace(context);
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!INDEXING_CONFIG_KEYS.some((key) => e.affectsConfiguration(key))) {
+        return;
+      }
+      scheduleIndexingSettingsRefresh();
     })
   );
 
   await initializeWorkspace(context);
+}
+
+function logCpuInfo(context: vscode.ExtensionContext): void {
+  if (!outputChannel) {
+    outputChannel = vscode.window.createOutputChannel('Code Search');
+    context.subscriptions.push(outputChannel);
+  }
+  const cpuCount = getLogicalCpuCount();
+  outputChannel.appendLine(
+    `本机逻辑处理器: ${cpuCount}。codeSearch.indexThreads=0（自动）将使用 ${cpuCount} 路并发索引。`
+  );
 }
 
 function registerCommands(context: vscode.ExtensionContext): void {
@@ -382,7 +413,40 @@ function searchSelection(): void {
   })();
 }
 
+function scheduleIndexingSettingsRefresh(): void {
+  if (indexingSettingsRefreshTimer) {
+    clearTimeout(indexingSettingsRefreshTimer);
+  }
+  indexingSettingsRefreshTimer = setTimeout(() => {
+    indexingSettingsRefreshTimer = undefined;
+    void runIndexingSettingsRefresh();
+  }, INDEXING_SETTINGS_REFRESH_DEBOUNCE_MS);
+}
+
+async function runIndexingSettingsRefresh(): Promise<void> {
+  if (!indexManager) {
+    return;
+  }
+  const writable = indexManager.getAllServices().filter((s) => !s.isReadOnly());
+  if (writable.length === 0) {
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'Code Search: Refreshing indexes after settings change...',
+    },
+    () => indexManager!.refreshAll(true)
+  );
+  panelProvider?.sendIndexStatus();
+}
+
 export function deactivate(): void {
+  if (indexingSettingsRefreshTimer) {
+    clearTimeout(indexingSettingsRefreshTimer);
+    indexingSettingsRefreshTimer = undefined;
+  }
   if (extensionContext) {
     void saveSecondaryIds(extensionContext);
   }

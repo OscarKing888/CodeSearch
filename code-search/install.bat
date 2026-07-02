@@ -51,7 +51,7 @@ if errorlevel 1 (
 echo.
 echo [3/3] Optional: rebuild for CLI on system Node.js
 echo       Skip this if you only use the VS Code extension.
-call npm rebuild better-sqlite3
+node "%~dp0scripts\rebuild-node.js"
 if errorlevel 1 (
     echo [WARN] System Node rebuild failed. CLI ^(ess^) may not work; extension is unaffected.
 )

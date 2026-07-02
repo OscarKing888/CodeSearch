@@ -4,6 +4,7 @@ export interface IndexingSettings {
   excludeFileNames: string[];
   includeGlobs: string[];
   maxFileSizeKB: number;
+  indexThreads: number;
 }
 
 export const DEFAULT_EXCLUDE_GLOBS = [
@@ -21,6 +22,15 @@ export const DEFAULT_EXCLUDE_GLOBS = [
   '**/Saved/**',
   '**/Binaries/**',
   '**/DerivedDataCache/**',
+  '**/DerivedData/**',
+  '**/Build/**',
+  '**/Staging/**',
+  '**/ShaderCache/**',
+  '**/ShaderDebugInfo/**',
+  '**/AutomationReports/**',
+  '**/Packaging/**',
+  '**/enc_temp_folder/**',
+  '**/WebCache/**',
 ];
 
 export const DEFAULT_EXCLUDE_DIR_NAMES = [
@@ -40,6 +50,15 @@ export const DEFAULT_EXCLUDE_DIR_NAMES = [
   'Binaries',
   'DerivedDataCache',
   'DerivedData',
+  'Build',
+  'Staging',
+  'ShaderCache',
+  'ShaderDebugInfo',
+  'AutomationReports',
+  'Packaging',
+  'enc_temp_folder',
+  'WebCache',
+  'Content',
 ];
 
 export const DEFAULT_EXCLUDE_FILE_NAMES = [
@@ -52,6 +71,13 @@ export const DEFAULT_EXCLUDE_FILE_NAMES = [
   '*.dylib',
   '*.cache',
   '*.min.js',
+  '*.uasset',
+  '*.umap',
+  '*.ubulk',
+  '*.uexp',
+  '*.ucas',
+  '*.utoc',
+  '*.uptodate',
 ];
 
 export const DEFAULT_INDEXING_SETTINGS: IndexingSettings = {
@@ -60,7 +86,20 @@ export const DEFAULT_INDEXING_SETTINGS: IndexingSettings = {
   excludeFileNames: DEFAULT_EXCLUDE_FILE_NAMES,
   includeGlobs: ['**/*'],
   maxFileSizeKB: 2048,
+  indexThreads: 0,
 };
+
+function mergeDefaultPatterns(configured: string[] | undefined, defaults: string[]): string[] {
+  const base = configured && configured.length > 0 ? [...configured] : [...defaults];
+  const seen = new Set(base);
+  for (const item of defaults) {
+    if (!seen.has(item)) {
+      seen.add(item);
+      base.push(item);
+    }
+  }
+  return base;
+}
 
 export function getIndexingSettings(): IndexingSettings {
   try {
@@ -68,12 +107,16 @@ export function getIndexingSettings(): IndexingSettings {
     const vscode = require('vscode') as typeof import('vscode');
     if (vscode?.workspace) {
       const cfg = vscode.workspace.getConfiguration('codeSearch');
+      const configuredGlobs = cfg.get<string[]>('excludeGlobs');
+      const configuredDirNames = cfg.get<string[]>('excludeDirNames');
+      const configuredFileNames = cfg.get<string[]>('excludeFileNames');
       return {
-        excludeGlobs: cfg.get<string[]>('excludeGlobs', DEFAULT_INDEXING_SETTINGS.excludeGlobs),
-        excludeDirNames: cfg.get<string[]>('excludeDirNames', DEFAULT_INDEXING_SETTINGS.excludeDirNames),
-        excludeFileNames: cfg.get<string[]>('excludeFileNames', DEFAULT_INDEXING_SETTINGS.excludeFileNames),
+        excludeGlobs: mergeDefaultPatterns(configuredGlobs, DEFAULT_EXCLUDE_GLOBS),
+        excludeDirNames: mergeDefaultPatterns(configuredDirNames, DEFAULT_EXCLUDE_DIR_NAMES),
+        excludeFileNames: mergeDefaultPatterns(configuredFileNames, DEFAULT_EXCLUDE_FILE_NAMES),
         includeGlobs: cfg.get<string[]>('includeGlobs', DEFAULT_INDEXING_SETTINGS.includeGlobs),
         maxFileSizeKB: cfg.get<number>('maxFileSizeKB', DEFAULT_INDEXING_SETTINGS.maxFileSizeKB),
+        indexThreads: cfg.get<number>('indexThreads', DEFAULT_INDEXING_SETTINGS.indexThreads),
       };
     }
   } catch {

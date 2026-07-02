@@ -27,6 +27,7 @@ function testIsExcludedDir(): void {
     excludeGlobs: [],
     includeGlobs: ['**/*'],
     maxFileSizeKB: 2048,
+    indexThreads: 0,
   };
   assert.strictEqual(isExcludedDir('Intermediate', settings), true);
   assert.strictEqual(isExcludedDir('src', settings), false);
@@ -40,6 +41,7 @@ function testIsExcludedFile(): void {
     excludeGlobs: ['**/temp/**'],
     includeGlobs: ['**/*'],
     maxFileSizeKB: 2048,
+    indexThreads: 0,
   };
   assert.strictEqual(isExcludedFile('C:/proj/foo.pdb', settings), true);
   assert.strictEqual(isExcludedFile('C:/proj/foo.cpp', settings), false);
@@ -54,6 +56,7 @@ function testIsPathIgnored(): void {
     excludeGlobs: ['**/node_modules/**'],
     includeGlobs: ['**/*'],
     maxFileSizeKB: 2048,
+    indexThreads: 0,
   };
   assert.strictEqual(isPathIgnored('C:/proj/Intermediate/foo.cpp', settings), true);
   assert.strictEqual(isPathIgnored('C:/proj/src/foo.pdb', settings), true);
@@ -95,6 +98,7 @@ async function testWalkDirectorySkipsExcluded(): Promise<void> {
     excludeGlobs: [],
     includeGlobs: ['**/*'],
     maxFileSizeKB: 2048,
+    indexThreads: 0,
   };
 
   const files: string[] = [];

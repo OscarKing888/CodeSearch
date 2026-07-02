@@ -5,6 +5,7 @@ export interface IndexProgress {
   queued: number;
   indexed: number;
   total: number;
+  scanned?: number;
   message: string;
 }
 

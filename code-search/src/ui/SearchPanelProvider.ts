@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
+import { isBinaryExtension } from '../index/FileScanner';
 import { IndexManager } from '../index/IndexManager';
 import { MultiIndexSearchService, MultiSearchResult, getRelativePath } from '../search/MultiIndexSearchService';
 import { createRegistry, highlightHits } from '../utils/syntaxHighlight';
@@ -289,6 +290,10 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     column: number,
     preview: boolean
   ): Promise<void> {
+    if (isBinaryExtension(path)) {
+      void vscode.window.showWarningMessage(`Code Search: 无法打开二进制文件 ${path}`);
+      return;
+    }
     const uri = vscode.Uri.file(path);
     const doc = await vscode.workspace.openTextDocument(uri);
     const options: vscode.TextDocumentShowOptions = {

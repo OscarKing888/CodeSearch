@@ -381,11 +381,22 @@ export class IndexManager extends EventEmitter {
     const partial = services.some((s) => s.isPartialIndex());
     const indexing = services.filter((s) => s.getProgress().status === 'indexing');
     if (indexing.length > 0) {
-      return { message: `Indexing ${indexing.length} index(es)...`, partial };
+      const indexed = indexing.reduce((sum, s) => sum + s.getProgress().indexed, 0);
+      const total = indexing.reduce((sum, s) => sum + s.getProgress().total, 0);
+      const indexSuffix = indexing.length > 1 ? ` (${indexing.length} indexes)` : '';
+      return {
+        message:
+          total > 0
+            ? `Indexing ${indexed}/${total} files${indexSuffix}...`
+            : `Indexing${indexSuffix}...`,
+        partial,
+      };
     }
     const scanning = services.filter((s) => s.getProgress().status === 'scanning');
     if (scanning.length > 0) {
-      return { message: 'Scanning...', partial };
+      const scanned = scanning.reduce((sum, s) => sum + (s.getProgress().scanned ?? 0), 0);
+      const scanSuffix = scanning.length > 1 ? ` (${scanning.length} indexes)` : '';
+      return { message: `Scanning ${scanned} files${scanSuffix}...`, partial };
     }
     const count = services.length;
     return { message: count > 1 ? `Up to date (${count} indexes)` : 'Up to date', partial };

@@ -22,16 +22,17 @@ if [[ ! -d node_modules ]]; then
   echo
 fi
 
-echo "[1/4] Rebuilding better-sqlite3 for editor Electron..."
-node "$SCRIPT_DIR/scripts/rebuild-electron.js" "$TARGET"
-
-echo
-echo "[2/4] Building extension (esbuild)..."
+echo "[1/4] Building extension (esbuild)..."
 npm run build
 
 echo
-echo "[3/4] Running tests..."
+echo "[2/4] Running tests..."
+node "$SCRIPT_DIR/scripts/rebuild-node.js"
 npm test
+
+echo
+echo "[3/4] Rebuilding better-sqlite3 for editor Electron..."
+node "$SCRIPT_DIR/scripts/rebuild-electron.js" "$TARGET"
 
 echo
 echo "[4/4] Packaging VSIX..."
