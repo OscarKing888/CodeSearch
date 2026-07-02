@@ -1,0 +1,17 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+esbuild.js
+tsconfig.json
+test/**
+**/*.ts
+**/*.map
+install.bat
+install.sh
+build.bat
+build.sh
+install-extension.bat
+install-extension.sh
+安装CodeSearch.bat
+*.vsix

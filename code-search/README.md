@@ -10,7 +10,7 @@ VS Code 扩展，对标 [Entrian Source Search](https://entrian.com/source-searc
 
 | 类别 | Entrian 功能 | 状态 |
 |------|-------------|------|
-| **索引** | 可配置根目录全文索引 | ✅ 工作区根目录 + `source-search.autocreate` 指定根目录 |
+| **索引** | 可配置根目录全文索引 | ✅ 工作区根目录 + `code-search.autocreate` 指定根目录 |
 | | 多根目录 / 二级只读索引 / 目录映射 | ✅ 二级索引 + 路径映射 |
 | | 增量更新（文件监视器） | ✅ chokidar 实时更新 |
 | | 低优先级后台节流（Be extra nice） | ⬜ 待实现 |
@@ -23,7 +23,7 @@ VS Code 扩展，对标 [Entrian Source Search](https://entrian.com/source-searc
 | | 强制刷新 | ✅ 命令面板全量刷新 |
 | | changed-only / all-files 分模式刷新 | ⬜ 待实现 |
 | | 索引管理（创建 / 删除 / 移动 / 重命名） | ✅ 专属管理面板（编辑器标签页） |
-| | `EntrianSourceSearch.autocreate` / `source-search.autocreate` | ✅ JSON 自动创建 |
+| | `EntrianSourceSearch.autocreate` / `code-search.autocreate` | ✅ JSON 自动创建 |
 | | CLI 索引工具（ess） | ✅ `ess.bat` / `npm run cli` |
 | **搜索** | 单词 / 多词 / 短语 | ✅ |
 | | 通配符 `*`（单词级） | ✅ |

@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { minimatch } from 'minimatch';
-import { getIndexingSettings } from '../indexingSettings';
+import { IndexingSettings } from '../indexingSettings';
+import { isExcludedDir, isExcludedFile } from './excludePatterns';
 import { FileRecord } from '../types';
 
 const TEXT_EXTENSIONS = new Set([
@@ -48,7 +49,7 @@ function matchesAny(patterns: string[], filePath: string): boolean {
 
 export function shouldIndexFile(
   filePath: string,
-  config: { excludeGlobs: string[]; includeGlobs: string[]; maxFileSizeKB: number },
+  config: IndexingSettings,
   sizeBytes: number
 ): boolean {
   const normalized = normalizePath(filePath);
@@ -63,7 +64,7 @@ export function shouldIndexFile(
     return false;
   }
 
-  if (matchesAny(config.excludeGlobs, normalized)) {
+  if (isExcludedFile(filePath, config)) {
     return false;
   }
 
@@ -115,7 +116,7 @@ export async function readFileForIndex(filePath: string): Promise<FileRecord | n
 
 export async function* walkDirectory(
   rootDir: string,
-  config: { excludeGlobs: string[]; includeGlobs: string[]; maxFileSizeKB: number }
+  config: IndexingSettings
 ): AsyncGenerator<string> {
   const stack: string[] = [rootDir];
 
@@ -133,7 +134,7 @@ export async function* walkDirectory(
       const normalized = normalizePath(fullPath);
 
       if (entry.isDirectory()) {
-        if (matchesAny(config.excludeGlobs, normalized + '/')) {
+        if (isExcludedDir(entry.name, config) || matchesAny(config.excludeGlobs, normalized + '/')) {
           continue;
         }
         stack.push(fullPath);

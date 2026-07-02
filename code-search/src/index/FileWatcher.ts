@@ -1,6 +1,7 @@
 import * as chokidar from 'chokidar';
 import * as path from 'path';
-import { getIndexingSettings } from '../indexingSettings';
+import { IndexingSettings } from '../indexingSettings';
+import { isPathIgnored } from './excludePatterns';
 
 export type FileChangeHandler = (filePath: string, event: 'add' | 'change' | 'unlink') => void;
 
@@ -8,19 +9,20 @@ export class FileWatcher {
   private watcher: chokidar.FSWatcher | undefined;
   private handler: FileChangeHandler | undefined;
 
-  start(rootDirs: string[], config: { excludeGlobs: string[] }, handler: FileChangeHandler): void {
+  start(rootDirs: string[], config: IndexingSettings, handler: FileChangeHandler): void {
     this.stop();
     this.handler = handler;
 
-    const ignored = config.excludeGlobs.map((g) => {
-      if (g.startsWith('**/')) {
-        return g;
-      }
-      return `**/${g}`;
-    });
+    const normalizedRoots = rootDirs.map((r) => path.normalize(r));
 
     this.watcher = chokidar.watch(rootDirs, {
-      ignored,
+      ignored: (watchPath) => {
+        const normalized = path.normalize(watchPath);
+        if (normalizedRoots.some((root) => normalized === root)) {
+          return false;
+        }
+        return isPathIgnored(normalized, config);
+      },
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },

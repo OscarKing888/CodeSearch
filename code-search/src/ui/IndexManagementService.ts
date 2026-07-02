@@ -3,7 +3,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { IndexManager } from '../index/IndexManager';
 import { IndexService } from '../index/IndexService';
-import { DirectoryMapping } from '../index/types';
+import { DirectoryMapping, IndexMeta } from '../index/types';
+import { formatPatternLines, parsePatternLines, PerIndexExcludes } from '../index/excludePatterns';
 
 export interface IndexListItem {
   id: string;
@@ -15,6 +16,9 @@ export interface IndexListItem {
   isAttached: boolean;
   directoryMappings: DirectoryMapping[];
   mappingsText: string;
+  excludeDirsText: string;
+  excludeFilesText: string;
+  excludeGlobsText: string;
   statusMessage: string;
   partial: boolean;
 }
@@ -42,6 +46,30 @@ export function formatMappings(mappings: DirectoryMapping[]): string {
   return mappings.map((m) => `${m.from} => ${m.to}`).join('\n');
 }
 
+export function formatExcludeRules(meta: Pick<IndexMeta, 'excludeDirNames' | 'excludeFileNames' | 'excludeGlobs'>): {
+  excludeDirsText: string;
+  excludeFilesText: string;
+  excludeGlobsText: string;
+} {
+  return {
+    excludeDirsText: formatPatternLines(meta.excludeDirNames),
+    excludeFilesText: formatPatternLines(meta.excludeFileNames),
+    excludeGlobsText: formatPatternLines(meta.excludeGlobs),
+  };
+}
+
+export function parseExcludeRulesInput(
+  dirsText: string,
+  filesText: string,
+  globsText: string
+): PerIndexExcludes {
+  return {
+    excludeDirNames: parsePatternLines(dirsText),
+    excludeFileNames: parsePatternLines(filesText),
+    excludeGlobs: parsePatternLines(globsText),
+  };
+}
+
 export function getIndexListPayload(manager: IndexManager): IndexListPayload {
   const primary = manager.getPrimary();
   const primaryId = primary?.id;
@@ -52,6 +80,7 @@ export function getIndexListPayload(manager: IndexManager): IndexListPayload {
   for (const meta of registryIndexes) {
     const service = findServiceById(manager, meta.id);
     const progress = service?.getProgress();
+    const excludeText = formatExcludeRules(meta);
     items.push({
       id: meta.id,
       name: meta.name,
@@ -62,6 +91,9 @@ export function getIndexListPayload(manager: IndexManager): IndexListPayload {
       isAttached: meta.id === primaryId || attachedIds.has(meta.id),
       directoryMappings: meta.directoryMappings,
       mappingsText: formatMappings(meta.directoryMappings),
+      excludeDirsText: excludeText.excludeDirsText,
+      excludeFilesText: excludeText.excludeFilesText,
+      excludeGlobsText: excludeText.excludeGlobsText,
       statusMessage: progress?.message ?? '—',
       partial: progress ? progress.status !== 'upToDate' : false,
     });
@@ -105,6 +137,30 @@ export async function setMappings(
   const mappings = parseMappings(text);
   const ok = await manager.setDirectoryMappings(id, mappings);
   return ok ? null : 'Failed to save mappings';
+}
+
+export async function setExcludeRules(
+  manager: IndexManager,
+  id: string,
+  dirsText: string,
+  filesText: string,
+  globsText: string
+): Promise<string | null> {
+  const rules = parseExcludeRulesInput(dirsText, filesText, globsText);
+  const ok = await manager.setExcludeRules(id, rules);
+  if (!ok) {
+    return 'Failed to save exclude rules';
+  }
+
+  const service = findServiceById(manager, id);
+  if (service && !service.isReadOnly()) {
+    try {
+      await service.refresh(true);
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }
+  return null;
 }
 
 export async function attachIndex(manager: IndexManager, id: string): Promise<string | null> {

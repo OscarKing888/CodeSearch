@@ -17,6 +17,9 @@ interface IndexListItem {
   isAttached: boolean;
   directoryMappings: DirectoryMapping[];
   mappingsText: string;
+  excludeDirsText: string;
+  excludeFilesText: string;
+  excludeGlobsText: string;
   statusMessage: string;
   partial: boolean;
 }
@@ -26,6 +29,7 @@ const vscode = acquireVsCodeApi();
 let allIndexes: IndexListItem[] = [];
 let filterText = '';
 const expandedMappings = new Set<string>();
+const expandedExcludes = new Set<string>();
 const editingRename = new Set<string>();
 
 const listEl = document.getElementById('indexList')!;
@@ -106,6 +110,7 @@ function renderCard(item: IndexListItem): string {
 
   const roots = item.rootDirs.length > 0 ? item.rootDirs.join('; ') : '—';
   const mappingsExpanded = expandedMappings.has(item.id);
+  const excludesExpanded = expandedExcludes.has(item.id);
   const renameEditing = editingRename.has(item.id);
 
   let actions = '';
@@ -126,6 +131,7 @@ function renderCard(item: IndexListItem): string {
   }
 
   actions += `<button class="btn mappings-toggle" data-id="${esc(item.id)}">Directory Mappings</button>`;
+  actions += `<button class="btn excludes-toggle" data-id="${esc(item.id)}">Exclude Rules</button>`;
 
   if (!item.isPrimary) {
     if (item.isAttached) {
@@ -144,6 +150,32 @@ function renderCard(item: IndexListItem): string {
       <button class="btn btn-primary mappings-save" data-id="${esc(item.id)}">Save Mappings</button>`;
   }
 
+  let excludesBlock = '';
+  if (excludesExpanded) {
+    const readonlyAttr = item.readOnly ? 'readonly' : '';
+    const saveBtn = item.readOnly
+      ? ''
+      : `<button class="btn btn-primary excludes-save" data-id="${esc(item.id)}">Save Exclude Rules</button>`;
+    excludesBlock = `
+      <div class="mappings-label">Per-index exclude rules (appended to global settings). One pattern per line; # for comments. Supports wildcards (*).</div>
+      <div class="exclude-block">
+        <div class="mappings-label">Directory names (any depth)</div>
+        <div class="exclude-hint">e.g. Intermediate, .vscode, Derived*</div>
+        <textarea class="exclude-dirs" data-id="${esc(item.id)}" ${readonlyAttr}>${esc(item.excludeDirsText)}</textarea>
+      </div>
+      <div class="exclude-block">
+        <div class="mappings-label">File names</div>
+        <div class="exclude-hint">e.g. *.pdb, package-lock.json</div>
+        <textarea class="exclude-files" data-id="${esc(item.id)}" ${readonlyAttr}>${esc(item.excludeFilesText)}</textarea>
+      </div>
+      <div class="exclude-block">
+        <div class="mappings-label">Path globs</div>
+        <div class="exclude-hint">e.g. **/custom-build/**</div>
+        <textarea class="exclude-globs" data-id="${esc(item.id)}" ${readonlyAttr}>${esc(item.excludeGlobsText)}</textarea>
+      </div>
+      ${saveBtn}`;
+  }
+
   return `
     <div class="card" data-id="${esc(item.id)}">
       <div class="card-header">
@@ -155,6 +187,7 @@ function renderCard(item: IndexListItem): string {
       <div class="meta">Status: ${esc(item.statusMessage)}</div>
       <div class="actions">${actions}</div>
       ${mappingsBlock}
+      ${excludesBlock}
     </div>`;
 }
 
@@ -198,6 +231,28 @@ function bindCardEvents(items: IndexListItem[]): void {
     listEl.querySelector(`.mappings-save[data-id="${cssEsc(id)}"]`)?.addEventListener('click', () => {
       const ta = listEl.querySelector(`textarea.mappings[data-id="${cssEsc(id)}"]`) as HTMLTextAreaElement;
       vscode.postMessage({ type: 'setMappings', id, text: ta.value });
+    });
+
+    listEl.querySelector(`.excludes-toggle[data-id="${cssEsc(id)}"]`)?.addEventListener('click', () => {
+      if (expandedExcludes.has(id)) {
+        expandedExcludes.delete(id);
+      } else {
+        expandedExcludes.add(id);
+      }
+      render();
+    });
+
+    listEl.querySelector(`.excludes-save[data-id="${cssEsc(id)}"]`)?.addEventListener('click', () => {
+      const dirsTa = listEl.querySelector(`textarea.exclude-dirs[data-id="${cssEsc(id)}"]`) as HTMLTextAreaElement;
+      const filesTa = listEl.querySelector(`textarea.exclude-files[data-id="${cssEsc(id)}"]`) as HTMLTextAreaElement;
+      const globsTa = listEl.querySelector(`textarea.exclude-globs[data-id="${cssEsc(id)}"]`) as HTMLTextAreaElement;
+      vscode.postMessage({
+        type: 'setExcludeRules',
+        id,
+        dirsText: dirsTa.value,
+        filesText: filesTa.value,
+        globsText: globsTa.value,
+      });
     });
 
     listEl.querySelector(`.attach-btn[data-id="${cssEsc(id)}"]`)?.addEventListener('click', () => {

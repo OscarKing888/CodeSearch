@@ -102,7 +102,6 @@ function ensureDefaultTab(): Tab {
 
 function renderTabs(): void {
   tabBar.querySelectorAll('.tab').forEach((el) => el.remove());
-  tabBar.classList.toggle('visible', tabs.length > 1);
 
   for (const tab of tabs) {
     const el = document.createElement('div');
@@ -132,11 +131,9 @@ function renderTabs(): void {
       closeTab(tab.id);
     });
 
-    if (tabs.length > 1) {
-      el.appendChild(lockBtn);
-      if (!tab.locked) {
-        el.appendChild(closeBtn);
-      }
+    el.appendChild(lockBtn);
+    if (tabs.length > 1 && !tab.locked) {
+      el.appendChild(closeBtn);
     }
     tabBar.insertBefore(el, btnNewTab);
   }
@@ -413,6 +410,34 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function openHitFile(hit: HitPayload, preview: boolean): void {
+  vscode.postMessage({
+    type: 'openFile',
+    path: hit.localPath ?? hit.path,
+    line: hit.line,
+    column: hit.column,
+    preview,
+  });
+}
+
+function navigateHit(direction: 'next' | 'prev'): void {
+  const tab = getActiveTab();
+  const hits = tab?.results?.hits;
+  if (!tab || !hits?.length) {
+    return;
+  }
+  const len = hits.length;
+  let idx = tab.selectedIndex;
+  if (direction === 'next') {
+    idx = idx < 0 ? 0 : (idx + 1) % len;
+  } else {
+    idx = idx <= 0 ? len - 1 : idx - 1;
+  }
+  tab.selectedIndex = idx;
+  renderResults(tab.results!, idx);
+  openHitFile(hits[idx], true);
+}
+
 function renderResults(result: SearchResultPayload, selectedIndex = -1): void {
   const partial = result.partialIndex ? ' (partial index)' : '';
   statusHits.textContent = `${result.hitCount.toLocaleString()} hits in ${result.fileCount} files · ${(result.elapsedMs / 1000).toFixed(2)}s${partial}`;
@@ -457,7 +482,7 @@ function renderResults(result: SearchResultPayload, selectedIndex = -1): void {
       if (tab) {
         tab.selectedIndex = index;
       }
-      vscode.postMessage({ type: 'openFile', index, preview: true });
+      openHitFile(hit, true);
       document.querySelectorAll('.hit').forEach((el, i) => {
         el.classList.toggle('selected', i === index);
       });
@@ -571,8 +596,8 @@ window.addEventListener('message', (event) => {
       updateQueryHighlight();
       doSearch(false);
       break;
-    case 'selectHit':
-      renderResults(getActiveTab()?.results ?? { hits: [], hitCount: 0, fileCount: 0, elapsedMs: 0, query: '', partialIndex: false }, msg.index);
+    case 'navigateHit':
+      navigateHit(msg.direction === 'prev' ? 'prev' : 'next');
       break;
   }
 });

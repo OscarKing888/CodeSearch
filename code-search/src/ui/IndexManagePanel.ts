@@ -13,6 +13,7 @@ import {
   renameIndex,
   saveSecondaryIds,
   setMappings,
+  setExcludeRules,
 } from './IndexManagementService';
 
 export class IndexManagePanel {
@@ -122,6 +123,9 @@ export class IndexManagePanel {
     id?: string;
     name?: string;
     text?: string;
+    dirsText?: string;
+    filesText?: string;
+    globsText?: string;
   }): Promise<void> {
     switch (msg.type) {
       case 'ready':
@@ -136,6 +140,14 @@ export class IndexManagePanel {
       case 'setMappings':
         if (msg.id && msg.text !== undefined) {
           await this.afterMutation(await setMappings(this.manager, msg.id, msg.text), 'Mappings saved');
+        }
+        break;
+      case 'setExcludeRules':
+        if (msg.id && msg.dirsText !== undefined && msg.filesText !== undefined && msg.globsText !== undefined) {
+          await this.afterMutation(
+            await setExcludeRules(this.manager, msg.id, msg.dirsText, msg.filesText, msg.globsText),
+            'Exclude rules saved'
+          );
         }
         break;
       case 'attach':
@@ -312,6 +324,21 @@ export class IndexManagePanel {
     }
     .empty { text-align: center; color: var(--vscode-descriptionForeground); padding: 32px; }
     .mappings-label { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 8px; }
+    .exclude-block { margin-top: 8px; }
+    .exclude-block textarea {
+      width: 100%;
+      min-height: 48px;
+      margin-top: 4px;
+      padding: 6px 8px;
+      font-family: var(--vscode-editor-font-family);
+      font-size: 11px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 2px;
+      resize: vertical;
+    }
+    .exclude-hint { font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 2px; }
   </style>
 </head>
 <body>

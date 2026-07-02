@@ -10,6 +10,9 @@ export interface IndexMeta {
   rootDirs: string[];
   readOnly: boolean;
   directoryMappings: DirectoryMapping[];
+  excludeDirNames?: string[];
+  excludeFileNames?: string[];
+  excludeGlobs?: string[];
   workspaceHashes: string[];
   createdAt: number;
   updatedAt: number;
@@ -22,6 +25,8 @@ export interface IndexRegistryData {
 export interface AutocreateConfig {
   indexLocation?: string;
   excludeList?: string[];
+  excludeDirNames?: string[];
+  excludeFileNames?: string[];
   includeList?: string[];
   ignoreGlobalExclusions?: boolean;
   ignoreGlobalInclusions?: boolean;

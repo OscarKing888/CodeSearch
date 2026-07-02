@@ -35,7 +35,7 @@ npm test
 
 echo
 echo "[4/4] Packaging VSIX..."
-npx --yes @vscode/vsce package --allow-missing-repository --baseContentUrl https://github.com/local/source-search/blob/main/source-search
+npx --yes @vscode/vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch
 
 VSIX="$(node -p "require('./package.json').name + '-' + require('./package.json').version + '.vsix'")"
 

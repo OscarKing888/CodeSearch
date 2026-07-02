@@ -4,6 +4,22 @@ import { EventEmitter } from 'events';
 import { IndexRegistry, mapFilePath } from './IndexRegistry';
 import { IndexService } from './IndexService';
 import { DirectoryMapping, IndexMeta } from './types';
+import { PerIndexExcludes } from './excludePatterns';
+
+function metaToPerIndexExcludes(meta: Pick<IndexMeta, 'excludeDirNames' | 'excludeFileNames' | 'excludeGlobs'>): PerIndexExcludes | undefined {
+  if (
+    !meta.excludeDirNames?.length &&
+    !meta.excludeFileNames?.length &&
+    !meta.excludeGlobs?.length
+  ) {
+    return undefined;
+  }
+  return {
+    excludeDirNames: meta.excludeDirNames,
+    excludeFileNames: meta.excludeFileNames,
+    excludeGlobs: meta.excludeGlobs,
+  };
+}
 
 export interface AttachedIndex {
   meta: IndexMeta;
@@ -21,7 +37,7 @@ export class IndexManager extends EventEmitter {
     super();
     this.globalStorage = globalStorage;
     this.workspaceHash = workspaceHash;
-    this.registry = new IndexRegistry(path.join(globalStorage, 'source-search'));
+    this.registry = new IndexRegistry(path.join(globalStorage, 'code-search'));
   }
 
   async initialize(): Promise<void> {
@@ -54,7 +70,8 @@ export class IndexManager extends EventEmitter {
   async createPrimary(
     dbPath: string,
     rootDirs: string[],
-    name = 'Primary'
+    name = 'Primary',
+    excludeRules?: PerIndexExcludes
   ): Promise<IndexService> {
     if (this.primary) {
       this.primary.dispose();
@@ -68,17 +85,76 @@ export class IndexManager extends EventEmitter {
       rootDirs,
       readOnly: false,
       directoryMappings: [],
+      excludeDirNames: excludeRules?.excludeDirNames,
+      excludeFileNames: excludeRules?.excludeFileNames,
+      excludeGlobs: excludeRules?.excludeGlobs,
       workspaceHashes: [this.workspaceHash],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
 
-    this.primary = new IndexService(dbPath, { id, name, readOnly: false });
+    this.primary = new IndexService(dbPath, {
+      id,
+      name,
+      readOnly: false,
+      perIndexExcludes: excludeRules,
+    });
     await this.primary.initialize(rootDirs);
     this.registry.upsert(meta);
     await this.registry.save();
 
     this.primary.on('progress', (p) => this.emit('progress', p));
+    this.emit('indexesChanged');
+    return this.primary;
+  }
+
+  async openPrimary(
+    dbPath: string,
+    rootDirs: string[],
+    name = 'Primary'
+  ): Promise<IndexService> {
+    if (this.primary) {
+      this.primary.dispose();
+    }
+
+    const normalized = path.resolve(dbPath);
+    let meta =
+      this.registry.getByWorkspaceHash(this.workspaceHash) ??
+      this.registry.getAll().find((i) => path.resolve(i.dbPath) === normalized);
+
+    if (!meta) {
+      meta = {
+        id: IndexRegistry.generateId(),
+        name,
+        dbPath: normalized,
+        rootDirs,
+        readOnly: false,
+        directoryMappings: [],
+        workspaceHashes: [this.workspaceHash],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+    } else {
+      meta.rootDirs = rootDirs;
+      meta.workspaceHashes = [...new Set([...meta.workspaceHashes, this.workspaceHash])];
+      meta.updatedAt = Date.now();
+      if (name && meta.name === 'Primary') {
+        meta.name = name;
+      }
+    }
+
+    this.primary = new IndexService(meta.dbPath, {
+      id: meta.id,
+      name: meta.name,
+      readOnly: meta.readOnly,
+      perIndexExcludes: metaToPerIndexExcludes(meta),
+    });
+    await this.primary.initialize(rootDirs);
+    this.registry.upsert(meta);
+    await this.registry.save();
+
+    this.primary.on('progress', (p) => this.emit('progress', p));
+    this.emit('indexesChanged');
     return this.primary;
   }
 
@@ -129,6 +205,7 @@ export class IndexManager extends EventEmitter {
       id: meta.id,
       name: meta.name,
       readOnly,
+      perIndexExcludes: metaToPerIndexExcludes(meta),
     });
     await service.initialize(meta.rootDirs.length > 0 ? meta.rootDirs : [path.dirname(normalized)]);
     if (!readOnly) {
@@ -245,6 +322,33 @@ export class IndexManager extends EventEmitter {
     if (attached) {
       attached.meta.directoryMappings = mappings;
     }
+    this.registry.upsert(meta);
+    await this.registry.save();
+    return true;
+  }
+
+  async setExcludeRules(id: string, rules: PerIndexExcludes): Promise<boolean> {
+    const meta = this.registry.getById(id);
+    if (!meta) {
+      return false;
+    }
+    meta.excludeDirNames = rules.excludeDirNames?.length ? rules.excludeDirNames : undefined;
+    meta.excludeFileNames = rules.excludeFileNames?.length ? rules.excludeFileNames : undefined;
+    meta.excludeGlobs = rules.excludeGlobs?.length ? rules.excludeGlobs : undefined;
+    meta.updatedAt = Date.now();
+
+    const perIndex = metaToPerIndexExcludes(meta);
+    if (this.primary?.id === id) {
+      this.primary.setPerIndexExcludes(perIndex);
+    }
+    const attached = this.secondaries.get(id);
+    if (attached) {
+      attached.meta.excludeDirNames = meta.excludeDirNames;
+      attached.meta.excludeFileNames = meta.excludeFileNames;
+      attached.meta.excludeGlobs = meta.excludeGlobs;
+      attached.service.setPerIndexExcludes(perIndex);
+    }
+
     this.registry.upsert(meta);
     await this.registry.save();
     return true;

@@ -1,12 +1,12 @@
 {
-  "name": "source-search",
+  "name": "code-search",
   "displayName": "Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
   "version": "0.1.4",
   "publisher": "local",
   "repository": {
     "type": "git",
-    "url": "https://github.com/local/source-search.git"
+    "url": "https://github.com/OscarKing888/CodeSearch.git"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -143,9 +143,52 @@
             "**/bin/**",
             "**/obj/**",
             "**/.vs/**",
-            "**/out/**"
+            "**/out/**",
+            "**/.vscode/**",
+            "**/.cursor/**",
+            "**/Intermediate/**",
+            "**/Saved/**",
+            "**/Binaries/**",
+            "**/DerivedDataCache/**"
           ],
-          "description": "Glob patterns to exclude from indexing"
+          "description": "Glob patterns to exclude from indexing (full path)"
+        },
+        "codeSearch.excludeDirNames": {
+          "type": "array",
+          "default": [
+            ".git",
+            "node_modules",
+            "dist",
+            "build",
+            "bin",
+            "obj",
+            "out",
+            ".vs",
+            ".vscode",
+            ".cursor",
+            ".idea",
+            "Intermediate",
+            "Saved",
+            "Binaries",
+            "DerivedDataCache",
+            "DerivedData"
+          ],
+          "description": "Directory segment names to exclude at any depth (supports wildcards)"
+        },
+        "codeSearch.excludeFileNames": {
+          "type": "array",
+          "default": [
+            "*.pdb",
+            "*.obj",
+            "*.o",
+            "*.exe",
+            "*.dll",
+            "*.so",
+            "*.dylib",
+            "*.cache",
+            "*.min.js"
+          ],
+          "description": "File base names to exclude (supports wildcards)"
         },
         "codeSearch.includeGlobs": {
           "type": "array",
@@ -212,7 +255,7 @@
     "rebuild:electron:vscode": "node scripts/rebuild-electron.js vscode",
     "rebuild:electron:cursor": "node scripts/rebuild-electron.js cursor",
     "package": "vsce package",
-    "test": "npx ts-node test/queryParser.test.ts",
+    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts",
     "cli": "node dist/cli.js"
   },
   "bin": {

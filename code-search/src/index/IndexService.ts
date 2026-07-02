@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
 import { getIndexingSettings } from '../indexingSettings';
 import { FileRecord, IndexProgress, IndexStatus } from '../types';
+import { mergeIndexingSettings, PerIndexExcludes } from './excludePatterns';
 import { extractTokens, readFileForIndex, shouldIndexFile, walkDirectory } from './FileScanner';
 import { FileWatcher } from './FileWatcher';
 
@@ -56,13 +57,18 @@ export class IndexService extends EventEmitter {
   private insertFtsStmt: Database.Statement | undefined;
   private getFileMtimeStmt: Database.Statement | undefined;
   private upsertTokenStmt: Database.Statement | undefined;
+  private perIndexExcludes: PerIndexExcludes | undefined;
 
-  constructor(dbPath: string, options?: { readOnly?: boolean; id?: string; name?: string }) {
+  constructor(
+    dbPath: string,
+    options?: { readOnly?: boolean; id?: string; name?: string; perIndexExcludes?: PerIndexExcludes }
+  ) {
     super();
     this.dbPath = dbPath;
     this.readOnly = options?.readOnly ?? false;
     this.id = options?.id ?? 'primary';
     this._name = options?.name ?? 'Primary';
+    this.perIndexExcludes = options?.perIndexExcludes;
   }
 
   get name(): string {
@@ -71,6 +77,14 @@ export class IndexService extends EventEmitter {
 
   setName(name: string): void {
     this._name = name;
+  }
+
+  setPerIndexExcludes(excludes: PerIndexExcludes | undefined): void {
+    this.perIndexExcludes = excludes;
+  }
+
+  private getEffectiveSettings() {
+    return mergeIndexingSettings(getIndexingSettings(), this.perIndexExcludes);
   }
 
   getDbPath(): string {
@@ -167,7 +181,7 @@ export class IndexService extends EventEmitter {
     this.indexed = 0;
     this.queued = 0;
 
-    const config = getIndexingSettings();
+    const config = this.getEffectiveSettings();
     const filesToIndex: string[] = [];
 
     for (const root of this.rootDirs) {
@@ -265,7 +279,7 @@ export class IndexService extends EventEmitter {
     if (this.readOnly) {
       return;
     }
-    const config = getIndexingSettings();
+    const config = this.getEffectiveSettings();
     try {
       const stat = await fs.promises.stat(filePath);
       if (!shouldIndexFile(filePath, config, stat.size)) {
@@ -295,7 +309,7 @@ export class IndexService extends EventEmitter {
     if (this.readOnly) {
       return;
     }
-    const config = getIndexingSettings();
+    const config = this.getEffectiveSettings();
     this.watcher.start(this.rootDirs, config, (filePath, event) => {
       void this.handleFileChange(filePath, event);
     });

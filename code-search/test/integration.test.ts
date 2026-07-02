@@ -5,7 +5,7 @@ import { IndexService } from '../src/index/IndexService';
 import { SearchService } from '../src/search/SearchService';
 
 async function main(): Promise<void> {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'source-search-test-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'code-search-test-'));
   const dbPath = path.join(tmpDir, 'index.db');
   const testFile = path.join(tmpDir, 'sample.ts');
   fs.writeFileSync(

@@ -51,7 +51,7 @@ if errorlevel 1 (
 
 echo.
 echo [4/4] Packaging VSIX...
-call npx --yes @vscode/vsce package --allow-missing-repository --baseContentUrl https://github.com/local/source-search/blob/main/source-search
+call npx --yes @vscode/vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch
 if errorlevel 1 (
     echo [ERROR] vsce package failed.
     exit /b 1

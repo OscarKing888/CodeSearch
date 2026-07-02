@@ -1,16 +1,13 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config';
 import { IndexManager } from '../index/IndexManager';
-import { ExtendedSearchHit, MultiIndexSearchService, MultiSearchResult, getRelativePath } from '../search/MultiIndexSearchService';
-import { SearchResult } from '../types';
+import { MultiIndexSearchService, MultiSearchResult, getRelativePath } from '../search/MultiIndexSearchService';
 import { createRegistry, highlightHits } from '../utils/syntaxHighlight';
 
 export class SearchPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'codeSearch.panel';
 
   private view: vscode.WebviewView | undefined;
-  private lastResults: ExtendedSearchHit[] = [];
-  private currentHitIndex = -1;
   private pendingQuery: string | undefined;
   private pendingMode: 'search' | 'file' | undefined;
   private pendingNewTab = false;
@@ -20,11 +17,22 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly indexManager: IndexManager,
-    private readonly searchService: MultiIndexSearchService,
-    private readonly workspaceRoots: string[],
+    private indexManager: IndexManager,
+    private searchService: MultiIndexSearchService,
+    private workspaceRoots: string[],
     private readonly context: vscode.ExtensionContext
   ) {}
+
+  rebind(
+    indexManager: IndexManager,
+    searchService: MultiIndexSearchService,
+    workspaceRoots: string[]
+  ): void {
+    this.indexManager = indexManager;
+    this.searchService = searchService;
+    this.workspaceRoots = workspaceRoots;
+    this.sendIndexStatus();
+  }
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -73,7 +81,9 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
           this.handleAutocomplete(msg.prefix ?? '');
           break;
         case 'openFile':
-          await this.openHit(msg.index ?? 0, msg.preview ?? true);
+          if (msg.path) {
+            await this.openHitAt(msg.path, msg.line ?? 1, msg.column ?? 1, msg.preview ?? true);
+          }
           break;
         case 'refreshIndex':
           await vscode.commands.executeCommand('codeSearch.refreshIndex');
@@ -221,9 +231,6 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       looseGap: config.looseGapDefault,
     });
 
-    this.lastResults = result.hits;
-    this.currentHitIndex = result.hits.length > 0 ? 0 : -1;
-
     let highlighted;
     try {
       const reg = await createRegistry(this.extensionUri);
@@ -260,41 +267,32 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
     this.postMessage(payload);
 
-    if (config.autoOpenSingleHit && result.hitCount === 1) {
-      await this.openHit(0, true);
+    if (config.autoOpenSingleHit && result.hitCount === 1 && result.hits[0]) {
+      const hit = result.hits[0];
+      await this.openHitAt(hit.localPath ?? hit.path, hit.line, hit.column, true);
     }
 
     return result;
   }
 
   nextHit(): void {
-    if (this.lastResults.length === 0) {
-      return;
-    }
-    this.currentHitIndex = (this.currentHitIndex + 1) % this.lastResults.length;
-    void this.openHit(this.currentHitIndex, true);
-    this.postMessage({ type: 'selectHit', index: this.currentHitIndex });
+    this.postMessage({ type: 'navigateHit', direction: 'next' });
   }
 
   prevHit(): void {
-    if (this.lastResults.length === 0) {
-      return;
-    }
-    this.currentHitIndex =
-      this.currentHitIndex <= 0 ? this.lastResults.length - 1 : this.currentHitIndex - 1;
-    void this.openHit(this.currentHitIndex, true);
-    this.postMessage({ type: 'selectHit', index: this.currentHitIndex });
+    this.postMessage({ type: 'navigateHit', direction: 'prev' });
   }
 
-  private async openHit(index: number, preview: boolean): Promise<void> {
-    const hit = this.lastResults[index];
-    if (!hit) {
-      return;
-    }
-    const uri = vscode.Uri.file(hit.localPath ?? hit.path);
+  private async openHitAt(
+    path: string,
+    line: number,
+    column: number,
+    preview: boolean
+  ): Promise<void> {
+    const uri = vscode.Uri.file(path);
     const doc = await vscode.workspace.openTextDocument(uri);
     const options: vscode.TextDocumentShowOptions = {
-      selection: new vscode.Range(hit.line - 1, hit.column - 1, hit.line - 1, hit.column - 1),
+      selection: new vscode.Range(line - 1, column - 1, line - 1, column - 1),
       viewColumn: vscode.ViewColumn.Active,
       preview,
     };
@@ -493,7 +491,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     .filter-file { color: #4ec9b0; }
     .filter-exclude { color: #f44747; }
     .tab-bar {
-      display: none;
+      display: flex;
       align-items: center;
       gap: 2px;
       padding: 2px 6px;
@@ -501,7 +499,6 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       flex-shrink: 0;
       overflow-x: auto;
     }
-    .tab-bar.visible { display: flex; }
     .tab {
       display: flex;
       align-items: center;
