@@ -5,6 +5,10 @@ import { IndexManager } from '../index/IndexManager';
 import { MultiIndexSearchService, MultiSearchResult, getRelativePath } from '../search/MultiIndexSearchService';
 import { createRegistry, highlightHits } from '../utils/syntaxHighlight';
 
+const UI_CONTEXT_LINES_KEY = 'codeSearch.ui.contextLines';
+const CONTEXT_LINES_MIN = 0;
+const CONTEXT_LINES_MAX = 10;
+
 export class SearchPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'codeSearch.panel';
 
@@ -15,6 +19,8 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   private pendingFocus = false;
   private webviewReady = false;
   private webviewReadyWaiters: Array<() => void> = [];
+  private panelVisible = false;
+  private panelWebviewFocused = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -50,15 +56,24 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtml(webviewView.webview);
 
     webviewView.onDidChangeVisibility((visible) => {
-      void vscode.commands.executeCommand('setContext', 'codeSearch.panel.focus', visible);
+      this.panelVisible = visible;
+      if (!visible) {
+        this.panelWebviewFocused = false;
+      }
+      this.updatePanelFocusContext();
     });
 
     webviewView.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
+        case 'panelFocus':
+          this.panelWebviewFocused = Boolean(msg.focused);
+          this.updatePanelFocusContext();
+          break;
         case 'ready':
           this.webviewReady = true;
           this.resolveWebviewReadyWaiters();
           this.sendIndexStatus();
+          this.sendInitConfig();
           this.flushPendingUi();
           break;
         case 'search':
@@ -69,7 +84,9 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
             msg.fuzzy,
             msg.loose,
             msg.tabId,
-            msg.newTab
+            msg.newTab,
+            msg.showContext,
+            msg.contextLines
           );
           break;
         case 'saveSecondaries':
@@ -91,6 +108,12 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'manageIndexes':
           await vscode.commands.executeCommand('codeSearch.manageIndexes');
+          break;
+        case 'openSettings':
+          await vscode.commands.executeCommand('codeSearch.openSettings');
+          break;
+        case 'setContextLines':
+          await this.setUiContextLines(Number(msg.contextLines));
           break;
       }
     });
@@ -219,13 +242,16 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     fuzzy?: boolean,
     loose?: boolean,
     tabId?: string,
-    _newTab?: boolean
+    _newTab?: boolean,
+    showContext?: boolean,
+    contextLines?: number
   ): Promise<MultiSearchResult | undefined> {
     const config = getConfig();
+    const effectiveContextLines = contextLines ?? this.getUiContextLines();
     const result = this.searchService.search(query, {
       caseSensitive: caseSensitive ?? false,
       phraseSearch: phraseSearch ?? config.phraseSearchDefault,
-      contextLines: config.contextLines,
+      contextLines: showContext ? effectiveContextLines : 0,
       maxResults: config.maxResults,
       fuzzy: fuzzy ?? config.fuzzySearchDefault,
       loose: loose ?? false,
@@ -312,6 +338,32 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       progress: { message: combined.message, partial: combined.partial },
       secondaryIndexes: attached,
     });
+  }
+
+  private getUiContextLines(): number {
+    const stored = this.context.globalState.get<number>(UI_CONTEXT_LINES_KEY);
+    if (stored !== undefined) {
+      return Math.max(CONTEXT_LINES_MIN, Math.min(CONTEXT_LINES_MAX, stored));
+    }
+    return getConfig().contextLines;
+  }
+
+  private async setUiContextLines(lines: number): Promise<void> {
+    const clamped = Math.max(CONTEXT_LINES_MIN, Math.min(CONTEXT_LINES_MAX, lines));
+    await this.context.globalState.update(UI_CONTEXT_LINES_KEY, clamped);
+    this.postMessage({ type: 'init', contextLines: clamped });
+  }
+
+  private sendInitConfig(): void {
+    this.postMessage({ type: 'init', contextLines: this.getUiContextLines() });
+  }
+
+  private updatePanelFocusContext(): void {
+    void vscode.commands.executeCommand(
+      'setContext',
+      'codeSearch.panel.focus',
+      this.panelVisible && this.panelWebviewFocused
+    );
   }
 
   private handleAutocomplete(prefix: string): void {
@@ -435,9 +487,24 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       min-width: 28px;
     }
     .btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+    .btn:disabled:hover { background: var(--vscode-button-secondaryBackground); }
     .btn.active {
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
+    }
+    .ctx-lines-wrap {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .btn-narrow {
+      min-width: 22px;
+      padding: 4px 4px;
     }
     .status-bar {
       display: flex;
@@ -451,22 +518,104 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     .results {
       flex: 1;
       overflow-y: auto;
-      padding: 4px 0;
+      padding: 0;
     }
-    .hit {
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      --cs-col-path: 100px;
+      --cs-col-line: 44px;
+    }
+    .results-table col.col-path {
+      width: var(--cs-col-path);
+    }
+    .results-table col.col-line {
+      width: var(--cs-col-line);
+    }
+    .results-table th {
+      position: relative;
       padding: 4px 8px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--vscode-descriptionForeground);
+      border-bottom: 1px solid var(--vscode-panel-border);
       cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      overflow: visible;
+    }
+    .results-table th.col-line {
+      text-align: right;
+    }
+    .col-header-label {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding-right: 6px;
+    }
+    .col-resizer {
+      position: absolute;
+      top: 0;
+      right: -3px;
+      width: 8px;
+      height: 100%;
+      cursor: col-resize;
+      z-index: 3;
+      touch-action: none;
+    }
+    .col-resizer:hover,
+    body.col-resizing .col-resizer {
+      background: var(--vscode-focusBorder);
+    }
+    body.col-resizing {
+      cursor: col-resize;
+      user-select: none;
+    }
+    .results-table thead {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--vscode-editor-background);
+    }
+    .results-table th:hover {
+      color: var(--vscode-foreground);
+      background: var(--vscode-list-hoverBackground);
+    }
+    .results-table td {
+      padding: 2px 8px;
+      vertical-align: top;
       border-bottom: 1px solid var(--vscode-panel-border);
     }
-    .hit:hover { background: var(--vscode-list-hoverBackground); }
-    .hit.selected { background: var(--vscode-list-activeSelectionBackground); }
-    .hit-header {
+    .col-path {
       font-size: 11px;
       color: var(--vscode-textLink-foreground);
-      margin-bottom: 2px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .col-line {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      white-space: nowrap;
+    }
+    .results-table td.col-line {
+      text-align: right;
+    }
+    .col-code {
+      width: auto;
+    }
+    .hit-row {
+      cursor: pointer;
+    }
+    .hit-row:hover,
+    .hit-context-row:hover {
+      background: var(--vscode-list-hoverBackground);
+    }
+    .hit-row.selected,
+    .hit-context-row.selected {
+      background: var(--vscode-list-activeSelectionBackground);
     }
     .hit-line {
       font-family: var(--vscode-editor-font-family);
@@ -475,12 +624,14 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .hit-context {
+    .hit-context-row td.col-code {
       font-family: var(--vscode-editor-font-family);
       font-size: var(--vscode-editor-font-size);
       color: var(--vscode-descriptionForeground);
       opacity: 0.7;
       white-space: pre;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .match-highlight {
       background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
@@ -548,8 +699,14 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     <button class="btn active" id="btnPhrase" title="Phrase search">""</button>
     <button class="btn" id="btnFuzzy" title="Fuzzy search">Fz</button>
     <button class="btn" id="btnLoose" title="Loose phrase search">~</button>
+    <span class="ctx-lines-wrap">
+      <button class="btn btn-narrow" id="btnCtxLess" title="Fewer context lines (0-10)">−</button>
+      <button class="btn" id="btnContext" title="Show context lines">Ctx</button>
+      <button class="btn btn-narrow" id="btnCtxMore" title="More context lines (0-10)">+</button>
+    </span>
     <button class="btn" id="btnRefresh" title="Refresh index">⟳</button>
     <button class="btn" id="btnManage" title="Manage indexes">⚙</button>
+    <button class="btn" id="btnSettings" title="Open Code Search settings">Set</button>
   </div>
   <div class="status-bar">
     <span id="statusHits">Ready</span>

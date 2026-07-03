@@ -112,6 +112,12 @@ function registerCommands(context: vscode.ExtensionContext): void {
       }
       manageIndexes();
     }),
+    vscode.commands.registerCommand('codeSearch.openSettings', () => {
+      void vscode.commands.executeCommand(
+        'workbench.action.openSettings',
+        `@ext:${context.extension.id}`
+      );
+    }),
     vscode.commands.registerCommand('codeSearch.openSecondaryIndex', async () => {
       if (!(await ensureWorkspaceReady()) || !indexManager) {
         return;

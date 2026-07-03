@@ -39,13 +39,14 @@ VS Code 扩展，对标 [Entrian Source Search](https://entrian.com/source-searc
 | **结果 UI** | 底部停靠搜索窗口 | ✅ WebviewView 面板 |
 | | 语法高亮结果 | 🟡 规则高亮（非完整 TextMate 主题） |
 | | 命中数 / 耗时统计 | ✅ |
-| | 上下文行数（Verbosity） | 🟡 配置项 `contextLines`，无滑块 UI |
+| | 可排序结果列表（路径 / 行号 / 代码） | ✅ 点击表头升/降序 |
+| | 上下文行显示 | ✅ 工具栏 Ctx；行数由 `contextLines` 配置 |
 | | 查询语法着色（绿 / 红过滤） | ✅ |
 | | 多标签页 | ✅ Ctrl+Enter / + 新建 |
 | | 标签锁定 | ✅ |
 | | 代码词自动补全 | ✅ |
 | **导航** | 光标下单词 / 选中文本搜索 | ✅ `Alt+=` |
-| | F8 / Shift+F8 跳转上 / 下命中 | ✅ |
+| | Ctrl+Alt+] / Ctrl+Alt+[ 跳转下/上命中 | ✅ |
 | | Shift+Alt+F 快速打开文件 | ✅ |
 | | 单击打开 / 预览 | ✅ Preview |
 | | 唯一命中自动打开 | ✅ 可配置 `autoOpenSingleHit` |
@@ -59,8 +60,8 @@ VS Code 扩展，对标 [Entrian Source Search](https://entrian.com/source-searc
 | Search Selection | `Alt+=` |
 | Focus Search | `Shift+Alt+=` |
 | Quick Open File | `Shift+Alt+F` |
-| Next Hit | `F8` |
-| Previous Hit | `Shift+F8` |
+| Next Hit | `Ctrl+Alt+]` |
+| Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | 命令面板 |
 | Manage Indexes | 工具栏 ⚙ |
 | Open Secondary Index | 命令面板 |

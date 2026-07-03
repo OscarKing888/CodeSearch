@@ -65,7 +65,7 @@ todos:
     content: 集成 vscode-textmate 实现结果语法高亮
     status: completed
   - id: commands
-    content: 注册命令与快捷键（Alt+=、F8、Shift+Alt+F 等）
+    content: 注册命令与快捷键（Alt+=、Ctrl+Alt+]/[、Shift+Alt+F 等）
     status: completed
   - id: settings
     content: 添加配置项（排除规则、上下文行数、短语默认等）+ 索引状态栏
@@ -112,7 +112,7 @@ isProject: false
 | | 标签锁定 | — | Phase 3 |
 | | 代码词自动补全 | — | Phase 2 |
 | **导航** | 光标下单词搜索 | 支持 | — |
-| | F8 / Shift+F8 跳转上/下命中 | 支持 | — |
+| | Ctrl+Alt+] / Ctrl+Alt+[ 跳转下/上命中 | 支持 | — |
 | | Shift+Alt+F 快速打开文件 | 支持 | — |
 | | 单击打开/预览 | 支持 Preview | — |
 | | 唯一命中自动打开 | 可配置 | — |
@@ -285,8 +285,8 @@ CREATE TABLE tokens (
 | `codeSearch.searchSelection` | `Alt+=` | 搜索光标下单词/选中文本 |
 | `codeSearch.focusSearch` | `Shift+Alt+=` | 聚焦搜索框 |
 | `codeSearch.quickOpenFile` | `Shift+Alt+F` | 文件过滤模式 |
-| `codeSearch.nextHit` | `F8` | 下一命中 |
-| `codeSearch.prevHit` | `Shift+F8` | 上一命中 |
+| `codeSearch.nextHit` | `Ctrl+Alt+]` | 下一命中（面板内聚焦时） |
+| `codeSearch.prevHit` | `Ctrl+Alt+[` | 上一命中（面板内聚焦时） |
 | `codeSearch.refreshIndex` | — | 强制重建索引 |
 
 ---
@@ -295,7 +295,7 @@ CREATE TABLE tokens (
 
 - `codeSearch.excludeGlobs` — 额外排除模式（默认含 `node_modules`, `dist`, `bin`, `obj`）
 - `codeSearch.includeGlobs` — 包含模式（默认 `**/*`）
-- `codeSearch.contextLines` — 结果上下文行数（对应 Verbosity）
+- `codeSearch.contextLines` — 开启 Ctx 后每条命中上下各显示的行数（默认 1，范围 0–10）
 - `codeSearch.phraseSearchDefault` — 默认短语模式
 - `codeSearch.autoOpenSingleHit` — 唯一命中自动打开
 - `codeSearch.maxResults` — 最大结果数（默认 10000）
@@ -311,7 +311,7 @@ CREATE TABLE tokens (
 2. `IndexService`：首次全量索引 + chokidar 增量更新 + 状态反馈
 3. `QueryParser` + `SearchService`：单词/短语/单词通配符 + ext/dir/file/age 过滤
 4. WebviewView 搜索面板：搜索框、工具栏、结果列表、语法高亮
-5. 导航命令：选中文本搜索、F8 跳转、快速打开文件
+5. 导航命令：选中文本搜索、Ctrl+Alt+]/[ 跳转、快速打开文件
 6. 基础设置页 + 排除规则
 
 **验收标准**: 打开含 1 万+ 文件的工作区，索引完成后搜索常见符号亚秒级返回；修改文件后 2 秒内索引更新；结果语法高亮与编辑器主题一致。
@@ -357,7 +357,7 @@ CREATE TABLE tokens (
 | `better-sqlite3` 原生编译在不同 VS Code 版本失败 | 使用 `@vscode/sqlite3` 或预编译 binary；文档说明 Node 版本 |
 | 超大仓库首次索引耗时长 | 边索引边搜索 + 进度条 + 可配置排除 |
 | FTS5 不支持 Entrian 全部通配符语义 | 复杂通配符走 SQL 过滤 + 内存后匹配 |
-| F8 与 VS 调试快捷键冲突 | 快捷键可配置，默认提供但允许用户覆盖 |
+| F8 / Shift+Alt+方向键 与内置快捷键冲突 | 默认 `Ctrl+Alt+]` / `Ctrl+Alt+[`；仅面板 webview 聚焦时生效；可自定义 |
 
 ---
 

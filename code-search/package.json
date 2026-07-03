@@ -2,8 +2,13 @@
   "name": "code-search",
   "displayName": "Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "publisher": "local",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#E85D04",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/OscarKing888/CodeSearch.git"
@@ -77,6 +82,10 @@
         "title": "Code Search: Manage Indexes"
       },
       {
+        "command": "codeSearch.openSettings",
+        "title": "Code Search: Open Settings"
+      },
+      {
         "command": "codeSearch.openSecondaryIndex",
         "title": "Code Search: Open Secondary Index"
       },
@@ -121,12 +130,12 @@
       },
       {
         "command": "codeSearch.nextHit",
-        "key": "f8",
+        "key": "ctrl+alt+]",
         "when": "codeSearch.panel.focus"
       },
       {
         "command": "codeSearch.prevHit",
-        "key": "shift+f8",
+        "key": "ctrl+alt+[",
         "when": "codeSearch.panel.focus"
       }
     ],
@@ -333,7 +342,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "node esbuild.js",
+    "build": "node scripts/generate-icon.js && node esbuild.js",
     "watch": "node esbuild.js --watch",
     "rebuild:electron": "node scripts/rebuild-electron.js",
     "rebuild:electron:vscode": "node scripts/rebuild-electron.js vscode",
@@ -358,6 +367,7 @@
     "chokidar": "^4.0.3",
     "esbuild": "^0.24.2",
     "minimatch": "^10.0.1",
+    "sharp": "^0.35.3",
     "typescript": "^5.7.2"
   }
 }

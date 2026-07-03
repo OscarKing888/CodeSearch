@@ -1,5 +1,7 @@
 declare function acquireVsCodeApi(): {
   postMessage(msg: unknown): void;
+  getState(): unknown;
+  setState(state: unknown): void;
 };
 
 const vscode = acquireVsCodeApi();
@@ -38,6 +40,24 @@ interface Suggestion {
   freq: number;
 }
 
+type SortColumn = 'path' | 'line' | 'code';
+type SortDirection = 'asc' | 'desc';
+
+interface ColumnWidths {
+  path: number;
+  line: number;
+}
+
+interface PersistedWebviewState {
+  columnLayoutVersion?: number;
+  columnWidths?: ColumnWidths;
+}
+
+const COLUMN_LAYOUT_VERSION = 2;
+const DEFAULT_COLUMN_WIDTHS: ColumnWidths = { path: 100, line: 44 };
+const MIN_COLUMN_WIDTHS: ColumnWidths = { path: 64, line: 36 };
+const MAX_COLUMN_WIDTHS: ColumnWidths = { path: 480, line: 120 };
+
 interface Tab {
   id: string;
   label: string;
@@ -45,6 +65,9 @@ interface Tab {
   locked: boolean;
   results?: SearchResultPayload;
   selectedIndex: number;
+  sortColumn: SortColumn;
+  sortDirection: SortDirection;
+  showContext: boolean;
 }
 
 const searchInput = document.getElementById('searchInput') as HTMLInputElement;
@@ -56,8 +79,12 @@ const btnCase = document.getElementById('btnCase') as HTMLButtonElement;
 const btnPhrase = document.getElementById('btnPhrase') as HTMLButtonElement;
 const btnFuzzy = document.getElementById('btnFuzzy') as HTMLButtonElement;
 const btnLoose = document.getElementById('btnLoose') as HTMLButtonElement;
+const btnContext = document.getElementById('btnContext') as HTMLButtonElement;
+const btnCtxLess = document.getElementById('btnCtxLess') as HTMLButtonElement;
+const btnCtxMore = document.getElementById('btnCtxMore') as HTMLButtonElement;
 const btnRefresh = document.getElementById('btnRefresh') as HTMLButtonElement;
 const btnManage = document.getElementById('btnManage') as HTMLButtonElement;
+const btnSettings = document.getElementById('btnSettings') as HTMLButtonElement;
 const statusHits = document.getElementById('statusHits') as HTMLSpanElement;
 const statusIndex = document.getElementById('statusIndex') as HTMLSpanElement;
 const resultsEl = document.getElementById('results') as HTMLDivElement;
@@ -70,10 +97,95 @@ let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 let acTimer: ReturnType<typeof setTimeout> | undefined;
 let suggestions: Suggestion[] = [];
 let acActiveIndex = -1;
+let configContextLines = 1;
 
 let tabs: Tab[] = [];
 let activeTabId = '';
 let tabCounter = 0;
+
+function loadColumnWidths(): ColumnWidths {
+  const state = vscode.getState() as PersistedWebviewState | null;
+  if (state?.columnLayoutVersion !== COLUMN_LAYOUT_VERSION) {
+    return { ...DEFAULT_COLUMN_WIDTHS };
+  }
+  return {
+    path: clampColumnWidth('path', state?.columnWidths?.path ?? DEFAULT_COLUMN_WIDTHS.path),
+    line: clampColumnWidth('line', state?.columnWidths?.line ?? DEFAULT_COLUMN_WIDTHS.line),
+  };
+}
+
+function clampColumnWidth(key: keyof ColumnWidths, value: number): number {
+  return Math.max(MIN_COLUMN_WIDTHS[key], Math.min(MAX_COLUMN_WIDTHS[key], value));
+}
+
+let columnWidths = loadColumnWidths();
+
+function saveColumnWidths(): void {
+  const prev = (vscode.getState() as PersistedWebviewState | null) ?? {};
+  vscode.setState({
+    ...prev,
+    columnLayoutVersion: COLUMN_LAYOUT_VERSION,
+    columnWidths,
+  });
+}
+
+function applyTableColumnWidths(table: HTMLTableElement): void {
+  table.style.setProperty('--cs-col-path', `${columnWidths.path}px`);
+  table.style.setProperty('--cs-col-line', `${columnWidths.line}px`);
+}
+
+function attachColumnResizer(
+  th: HTMLTableCellElement,
+  table: HTMLTableElement,
+  columnKey: keyof ColumnWidths
+): void {
+  const resizer = document.createElement('div');
+  resizer.className = 'col-resizer';
+  resizer.title = 'Drag to resize · double-click to reset';
+  th.appendChild(resizer);
+
+  const cssVar = columnKey === 'path' ? '--cs-col-path' : '--cs-col-line';
+
+  const applyWidth = (width: number) => {
+    columnWidths = { ...columnWidths, [columnKey]: width };
+    table.style.setProperty(cssVar, `${width}px`);
+  };
+
+  resizer.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizer.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startWidth = columnWidths[columnKey];
+
+    const onMove = (ev: PointerEvent) => {
+      const next = clampColumnWidth(columnKey, startWidth + (ev.clientX - startX));
+      applyWidth(next);
+    };
+    const onEnd = (ev: PointerEvent) => {
+      if (resizer.hasPointerCapture(ev.pointerId)) {
+        resizer.releasePointerCapture(ev.pointerId);
+      }
+      resizer.removeEventListener('pointermove', onMove);
+      resizer.removeEventListener('pointerup', onEnd);
+      resizer.removeEventListener('pointercancel', onEnd);
+      document.body.classList.remove('col-resizing');
+      saveColumnWidths();
+    };
+    document.body.classList.add('col-resizing');
+    resizer.addEventListener('pointermove', onMove);
+    resizer.addEventListener('pointerup', onEnd);
+    resizer.addEventListener('pointercancel', onEnd);
+  });
+
+  resizer.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    columnWidths = { ...DEFAULT_COLUMN_WIDTHS };
+    applyTableColumnWidths(table);
+    saveColumnWidths();
+  });
+}
 
 function createTab(query = '', label?: string): Tab {
   tabCounter++;
@@ -83,6 +195,9 @@ function createTab(query = '', label?: string): Tab {
     query,
     locked: false,
     selectedIndex: -1,
+    sortColumn: 'path',
+    sortDirection: 'asc',
+    showContext: false,
   };
   tabs.push(tab);
   return tab;
@@ -139,6 +254,39 @@ function renderTabs(): void {
   }
 }
 
+function syncContextButton(): void {
+  const tab = getActiveTab();
+  const show = tab?.showContext ?? false;
+  btnContext.classList.toggle('active', show);
+  btnContext.textContent = `Ctx${configContextLines > 0 ? `·${configContextLines}` : ''}`;
+  btnContext.title = show
+    ? `Hide context lines (${configContextLines} per side)`
+    : `Show context lines (${configContextLines} per side)`;
+  btnCtxLess.disabled = configContextLines <= 0;
+  btnCtxMore.disabled = configContextLines >= 10;
+}
+
+function changeContextLines(next: number): void {
+  const clamped = Math.max(0, Math.min(10, next));
+  if (clamped === configContextLines) {
+    return;
+  }
+  configContextLines = clamped;
+  syncContextButton();
+  vscode.postMessage({ type: 'setContextLines', contextLines: clamped });
+
+  const tab = getActiveTab();
+  if (!tab) {
+    return;
+  }
+  const needsRescan = tab.showContext && tab.query.trim().length > 0;
+  if (needsRescan) {
+    doSearch(false);
+  } else if (tab.results) {
+    renderResults(tab.results, tab.selectedIndex);
+  }
+}
+
 function switchTab(id: string): void {
   const prev = getActiveTab();
   if (prev) {
@@ -149,6 +297,7 @@ function switchTab(id: string): void {
   if (tab) {
     searchInput.value = tab.query;
     updateQueryHighlight();
+    syncContextButton();
     if (tab.results) {
       renderResults(tab.results, tab.selectedIndex);
     } else {
@@ -283,8 +432,32 @@ btnLoose.addEventListener('click', () => {
   doSearch(false);
 });
 
+btnContext.addEventListener('click', () => {
+  const tab = getActiveTab();
+  if (!tab) {
+    return;
+  }
+  tab.showContext = !tab.showContext;
+  syncContextButton();
+  const needsRescan =
+    tab.showContext &&
+    tab.results?.hits.some(
+      (h) => h.contextBefore.length > 0 || h.contextAfter.length > 0
+    ) === false &&
+    configContextLines > 0;
+  if (needsRescan && tab.query.trim()) {
+    doSearch(false);
+  } else if (tab.results) {
+    renderResults(tab.results, tab.selectedIndex);
+  }
+});
+
+btnCtxLess.addEventListener('click', () => changeContextLines(configContextLines - 1));
+btnCtxMore.addEventListener('click', () => changeContextLines(configContextLines + 1));
+
 btnRefresh.addEventListener('click', () => vscode.postMessage({ type: 'refreshIndex' }));
 btnManage.addEventListener('click', () => vscode.postMessage({ type: 'manageIndexes' }));
+btnSettings.addEventListener('click', () => vscode.postMessage({ type: 'openSettings' }));
 
 function doSearch(forceNewTab: boolean): void {
   const tab = findTargetTab(forceNewTab);
@@ -310,6 +483,8 @@ function doSearch(forceNewTab: boolean): void {
     phraseSearch,
     fuzzy,
     loose,
+    showContext: tab.showContext,
+    contextLines: configContextLines,
     tabId: tab.id,
     newTab: forceNewTab,
   });
@@ -420,22 +595,80 @@ function openHitFile(hit: HitPayload, preview: boolean): void {
   });
 }
 
+function getSortedIndices(
+  hits: HitPayload[],
+  column: SortColumn,
+  direction: SortDirection
+): number[] {
+  const indices = hits.map((_, i) => i);
+  indices.sort((a, b) => {
+    const ha = hits[a];
+    const hb = hits[b];
+    let cmp = 0;
+    switch (column) {
+      case 'path':
+        cmp = ha.relativePath.localeCompare(hb.relativePath);
+        break;
+      case 'line':
+        cmp = ha.line - hb.line;
+        if (cmp === 0) {
+          cmp = ha.relativePath.localeCompare(hb.relativePath);
+        }
+        break;
+      case 'code':
+        cmp = ha.lineText.localeCompare(hb.lineText);
+        if (cmp === 0) {
+          cmp = ha.relativePath.localeCompare(hb.relativePath) || ha.line - hb.line;
+        }
+        break;
+    }
+    return direction === 'asc' ? cmp : -cmp;
+  });
+  return indices;
+}
+
 function navigateHit(direction: 'next' | 'prev'): void {
   const tab = getActiveTab();
   const hits = tab?.results?.hits;
   if (!tab || !hits?.length) {
     return;
   }
-  const len = hits.length;
-  let idx = tab.selectedIndex;
-  if (direction === 'next') {
-    idx = idx < 0 ? 0 : (idx + 1) % len;
-  } else {
-    idx = idx <= 0 ? len - 1 : idx - 1;
+  const sortedIndices = getSortedIndices(hits, tab.sortColumn, tab.sortDirection);
+  const len = sortedIndices.length;
+  let displayIdx = sortedIndices.indexOf(tab.selectedIndex);
+  if (displayIdx < 0) {
+    displayIdx = direction === 'next' ? -1 : 0;
   }
-  tab.selectedIndex = idx;
-  renderResults(tab.results!, idx);
-  openHitFile(hits[idx], true);
+  if (direction === 'next') {
+    displayIdx = displayIdx < 0 ? 0 : (displayIdx + 1) % len;
+  } else {
+    displayIdx = displayIdx <= 0 ? len - 1 : displayIdx - 1;
+  }
+  tab.selectedIndex = sortedIndices[displayIdx];
+  renderResults(tab.results!, tab.selectedIndex);
+  openHitFile(hits[tab.selectedIndex], true);
+}
+
+function sortIndicator(column: SortColumn, activeColumn: SortColumn, direction: SortDirection): string {
+  if (column !== activeColumn) {
+    return '';
+  }
+  return direction === 'asc' ? ' ▲' : ' ▼';
+}
+
+function selectHit(originalIndex: number): void {
+  const tab = getActiveTab();
+  if (tab) {
+    tab.selectedIndex = originalIndex;
+  }
+  document.querySelectorAll('.hit-row').forEach((el) => {
+    const idx = Number((el as HTMLElement).dataset.hitIndex);
+    el.classList.toggle('selected', idx === originalIndex);
+  });
+  document.querySelectorAll('.hit-context-row').forEach((el) => {
+    const idx = Number((el as HTMLElement).dataset.hitIndex);
+    el.classList.toggle('selected', idx === originalIndex);
+  });
 }
 
 function renderResults(result: SearchResultPayload, selectedIndex = -1): void {
@@ -447,49 +680,140 @@ function renderResults(result: SearchResultPayload, selectedIndex = -1): void {
     return;
   }
 
-  resultsEl.innerHTML = '';
-  result.hits.forEach((hit, index) => {
-    const div = document.createElement('div');
-    div.className = 'hit' + (index === selectedIndex ? ' selected' : '');
+  const tab = getActiveTab();
+  const sortColumn = tab?.sortColumn ?? 'path';
+  const sortDirection = tab?.sortDirection ?? 'asc';
+  const showContext = tab?.showContext ?? false;
+  const sortedIndices = getSortedIndices(result.hits, sortColumn, sortDirection);
 
-    const header = document.createElement('div');
-    header.className = 'hit-header';
-    const badge = hit.indexLabel ? ` [${hit.indexLabel}]` : '';
-    header.textContent = `${hit.relativePath}:${hit.line}${badge}`;
-    div.appendChild(header);
+  const table = document.createElement('table');
+  table.className = 'results-table';
 
-    for (const ctx of hit.contextBefore) {
-      const ctxEl = document.createElement('div');
-      ctxEl.className = 'hit-context';
-      ctxEl.textContent = ctx;
-      div.appendChild(ctxEl);
+  const colgroup = document.createElement('colgroup');
+  const colPath = document.createElement('col');
+  colPath.className = 'col-path';
+  const colLine = document.createElement('col');
+  colLine.className = 'col-line';
+  const colCode = document.createElement('col');
+  colCode.className = 'col-code';
+  colgroup.append(colPath, colLine, colCode);
+  table.appendChild(colgroup);
+  applyTableColumnWidths(table);
+
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  const columns: Array<{
+    key: SortColumn;
+    label: string;
+    className: string;
+    resizable?: keyof ColumnWidths;
+  }> = [
+    { key: 'path', label: 'File', className: 'col-path', resizable: 'path' },
+    { key: 'line', label: 'Line', className: 'col-line', resizable: 'line' },
+    { key: 'code', label: 'Code', className: 'col-code' },
+  ];
+  for (const col of columns) {
+    const th = document.createElement('th');
+    th.className = col.className;
+    const label = document.createElement('span');
+    label.className = 'col-header-label';
+    label.textContent = col.label + sortIndicator(col.key, sortColumn, sortDirection);
+    th.appendChild(label);
+    if (col.resizable) {
+      attachColumnResizer(th, table, col.resizable);
     }
-
-    const lineEl = document.createElement('div');
-    lineEl.className = 'hit-line';
-    renderHighlightedLine(lineEl, hit);
-    div.appendChild(lineEl);
-
-    for (const ctx of hit.contextAfter) {
-      const ctxEl = document.createElement('div');
-      ctxEl.className = 'hit-context';
-      ctxEl.textContent = ctx;
-      div.appendChild(ctxEl);
-    }
-
-    div.addEventListener('click', () => {
-      const tab = getActiveTab();
-      if (tab) {
-        tab.selectedIndex = index;
+    th.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).classList.contains('col-resizer')) {
+        return;
       }
-      openHitFile(hit, true);
-      document.querySelectorAll('.hit').forEach((el, i) => {
-        el.classList.toggle('selected', i === index);
+      const activeTab = getActiveTab();
+      if (!activeTab?.results) {
+        return;
+      }
+      if (activeTab.sortColumn === col.key) {
+        activeTab.sortDirection = activeTab.sortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        activeTab.sortColumn = col.key;
+        activeTab.sortDirection = 'asc';
+      }
+      renderResults(activeTab.results, activeTab.selectedIndex);
+    });
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const originalIndex of sortedIndices) {
+    const hit = result.hits[originalIndex];
+    const isSelected = originalIndex === selectedIndex;
+    const badge = hit.indexLabel ? ` [${hit.indexLabel}]` : '';
+
+    const addContextRow = (text: string) => {
+      const tr = document.createElement('tr');
+      tr.className = 'hit-context-row' + (isSelected ? ' selected' : '');
+      tr.dataset.hitIndex = String(originalIndex);
+      const emptyPath = document.createElement('td');
+      emptyPath.className = 'col-path';
+      const emptyLine = document.createElement('td');
+      emptyLine.className = 'col-line';
+      const codeTd = document.createElement('td');
+      codeTd.className = 'col-code';
+      codeTd.textContent = text;
+      tr.appendChild(emptyPath);
+      tr.appendChild(emptyLine);
+      tr.appendChild(codeTd);
+      tr.addEventListener('click', () => {
+        selectHit(originalIndex);
+        openHitFile(hit, true);
       });
+      tbody.appendChild(tr);
+    };
+
+    if (showContext) {
+      for (const ctx of hit.contextBefore) {
+        addContextRow(ctx);
+      }
+    }
+
+    const tr = document.createElement('tr');
+    tr.className = 'hit-row' + (isSelected ? ' selected' : '');
+    tr.dataset.hitIndex = String(originalIndex);
+
+    const pathTd = document.createElement('td');
+    pathTd.className = 'col-path';
+    pathTd.textContent = hit.relativePath + badge;
+    pathTd.title = hit.relativePath + badge;
+
+    const lineTd = document.createElement('td');
+    lineTd.className = 'col-line';
+    lineTd.textContent = String(hit.line);
+
+    const codeTd = document.createElement('td');
+    codeTd.className = 'col-code hit-line';
+    renderHighlightedLine(codeTd, hit);
+
+    tr.appendChild(pathTd);
+    tr.appendChild(lineTd);
+    tr.appendChild(codeTd);
+
+    tr.addEventListener('click', () => {
+      selectHit(originalIndex);
+      openHitFile(hit, true);
     });
 
-    resultsEl.appendChild(div);
-  });
+    tbody.appendChild(tr);
+
+    if (showContext) {
+      for (const ctx of hit.contextAfter) {
+        addContextRow(ctx);
+      }
+    }
+  }
+  table.appendChild(tbody);
+
+  resultsEl.innerHTML = '';
+  resultsEl.appendChild(table);
 }
 
 function renderHighlightedLine(container: HTMLElement, hit: HitPayload): void {
@@ -560,6 +884,10 @@ function wrapMatch(container: HTMLElement, text: string, start: number, end: num
 window.addEventListener('message', (event) => {
   const msg = event.data;
   switch (msg.type) {
+    case 'init':
+      configContextLines = msg.contextLines ?? 1;
+      syncContextButton();
+      break;
     case 'results': {
       const tab = tabs.find((t) => t.id === msg.tabId) ?? getActiveTab();
       if (tab) {
@@ -587,6 +915,7 @@ window.addEventListener('message', (event) => {
     case 'focus':
       searchInput.focus();
       searchInput.select();
+      postPanelFocus(true);
       break;
     case 'newTab':
       newTab('');
@@ -605,6 +934,15 @@ window.addEventListener('message', (event) => {
 searchInput.style.background = 'transparent';
 searchHighlight.style.background = 'var(--vscode-input-background)';
 
+function postPanelFocus(focused: boolean): void {
+  vscode.postMessage({ type: 'panelFocus', focused });
+}
+
+window.addEventListener('focus', () => postPanelFocus(true));
+window.addEventListener('blur', () => postPanelFocus(false));
+document.addEventListener('pointerdown', () => postPanelFocus(true));
+
 ensureDefaultTab();
 renderTabs();
+syncContextButton();
 vscode.postMessage({ type: 'ready' });
