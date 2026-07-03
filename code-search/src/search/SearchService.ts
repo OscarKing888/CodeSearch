@@ -1,5 +1,5 @@
-import Database from 'better-sqlite3';
 import * as path from 'path';
+import { SqliteDatabase } from '../native/betterSqlite3';
 import { IndexService } from '../index/IndexService';
 import {
   buildFtsMatch,
@@ -66,7 +66,7 @@ export class SearchService {
   }
 
   private standardSearch(
-    db: Database.Database,
+    db: SqliteDatabase,
     parsed: ParsedQuery,
     options: SearchOptions
   ): SearchHit[] {
@@ -86,7 +86,7 @@ export class SearchService {
   }
 
   private looseSearch(
-    db: Database.Database,
+    db: SqliteDatabase,
     parsed: ParsedQuery,
     options: SearchOptions
   ): SearchHit[] {
@@ -131,7 +131,7 @@ export class SearchService {
   }
 
   private wildcardSearch(
-    db: Database.Database,
+    db: SqliteDatabase,
     parsed: ParsedQuery,
     options: SearchOptions
   ): SearchHit[] {
@@ -167,7 +167,7 @@ export class SearchService {
   }
 
   private fuzzyContentSearch(
-    db: Database.Database,
+    db: SqliteDatabase,
     parsed: ParsedQuery,
     options: SearchOptions
   ): SearchHit[] {
@@ -212,7 +212,7 @@ export class SearchService {
   }
 
   private fetchCandidateRows(
-    db: Database.Database,
+    db: SqliteDatabase,
     ftsQuery: string,
     parsed: ParsedQuery,
     options: SearchOptions
@@ -279,7 +279,7 @@ export class SearchService {
   }
 
   private filterOnlySearch(
-    db: Database.Database,
+    db: SqliteDatabase,
     parsed: ParsedQuery,
     options: SearchOptions,
     start: number,
@@ -339,7 +339,7 @@ export class SearchService {
   }
 
   private executeFtsSearch(
-    db: Database.Database,
+    db: SqliteDatabase,
     ftsQuery: string,
     parsed: ParsedQuery,
     options: SearchOptions

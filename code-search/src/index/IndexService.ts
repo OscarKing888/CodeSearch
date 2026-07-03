@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
 import { getIndexingSettings } from '../indexingSettings';
+import { openDatabase, SqliteDatabase, SqliteStatement } from '../native/betterSqlite3';
 import { FileRecord, IndexProgress, IndexStatus } from '../types';
 import { mergeIndexingSettings, PerIndexExcludes } from './excludePatterns';
 import {
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS meta (
 const BATCH_SIZE = 100;
 
 export class IndexService extends EventEmitter {
-  private db: Database.Database | undefined;
+  private db: SqliteDatabase | undefined;
   private dbPath: string;
   private rootDirs: string[] = [];
   private readonly readOnly: boolean;
@@ -61,13 +61,13 @@ export class IndexService extends EventEmitter {
   private scanned = 0;
   private activeThreadCount = 1;
 
-  private insertFileStmt: Database.Statement | undefined;
-  private updateFileStmt: Database.Statement | undefined;
-  private deleteFileStmt: Database.Statement | undefined;
-  private deleteFtsStmt: Database.Statement | undefined;
-  private insertFtsStmt: Database.Statement | undefined;
-  private getFileMtimeStmt: Database.Statement | undefined;
-  private upsertTokenStmt: Database.Statement | undefined;
+  private insertFileStmt: SqliteStatement | undefined;
+  private updateFileStmt: SqliteStatement | undefined;
+  private deleteFileStmt: SqliteStatement | undefined;
+  private deleteFtsStmt: SqliteStatement | undefined;
+  private insertFtsStmt: SqliteStatement | undefined;
+  private getFileMtimeStmt: SqliteStatement | undefined;
+  private upsertTokenStmt: SqliteStatement | undefined;
   private perIndexExcludes: PerIndexExcludes | undefined;
 
   constructor(
@@ -115,7 +115,7 @@ export class IndexService extends EventEmitter {
     const dir = path.dirname(this.dbPath);
     await fs.promises.mkdir(dir, { recursive: true });
 
-    this.db = new Database(this.dbPath, { readonly: this.readOnly });
+    this.db = openDatabase(this.dbPath, { readonly: this.readOnly });
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = NORMAL');
     this.db.exec(SCHEMA);
@@ -146,7 +146,7 @@ export class IndexService extends EventEmitter {
     `);
   }
 
-  getDatabase(): Database.Database | undefined {
+  getDatabase(): SqliteDatabase | undefined {
     return this.db;
   }
 

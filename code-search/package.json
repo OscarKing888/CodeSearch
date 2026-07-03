@@ -348,7 +348,7 @@
     "ess": "./dist/cli.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0"
+    "better-sqlite3": "^12.8.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.2",

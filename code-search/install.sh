@@ -39,7 +39,7 @@ npm install
 echo.
 echo "[2/3] Rebuilding better-sqlite3 for VS Code / Cursor Electron..."
 echo "      (native module must match editor Electron, not system Node.js)"
-node "$SCRIPT_DIR/scripts/rebuild-electron.js" vscode
+node "$SCRIPT_DIR/scripts/rebuild-electron.js" all
 
 echo
 echo "[3/3] Optional: rebuild for CLI on system Node.js"

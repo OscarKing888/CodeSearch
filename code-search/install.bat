@@ -40,7 +40,7 @@ if errorlevel 1 (
 
 echo [2/3] Rebuilding better-sqlite3 for VS Code / Cursor Electron...
 echo       (native module must match editor Electron, not system Node.js)
-node "%~dp0scripts\rebuild-electron.js" vscode
+node "%~dp0scripts\rebuild-electron.js" all
 if errorlevel 1 (
     echo.
     echo [WARN] Electron rebuild failed. Extension may not run in VS Code / Cursor.

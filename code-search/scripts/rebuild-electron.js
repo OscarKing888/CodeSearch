@@ -4,6 +4,15 @@ const os = require('os');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
+const NATIVE_DIR = path.join(ROOT, 'native');
+const SQLITE_NODE = path.join(
+  ROOT,
+  'node_modules',
+  'better-sqlite3',
+  'build',
+  'Release',
+  'better_sqlite3.node'
+);
 
 const ELECTRON_BY_VSCODE = {
   '1.106': '37.7.0',
@@ -30,6 +39,18 @@ const ELECTRON_BY_VSCODE = {
   '1.85': '27.2.3',
 };
 
+// Cursor ships a newer Electron than the matching VS Code base version.
+const CURSOR_ELECTRON_BY_VERSION = {
+  '3.9': '40.0.0',
+  '3.8': '39.0.0',
+  '3.7': '38.0.0',
+};
+
+const FALLBACK_ELECTRON = {
+  vscode: '37.7.0',
+  cursor: '40.0.0',
+};
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
@@ -41,6 +62,11 @@ function normalizeVersion(value) {
 function electronFromVscodeVersion(version) {
   const majorMinor = String(version).match(/^(\d+\.\d+)/)?.[1];
   return majorMinor ? ELECTRON_BY_VSCODE[majorMinor] : undefined;
+}
+
+function electronFromCursorVersion(version) {
+  const majorMinor = String(version).match(/^(\d+\.\d+)/)?.[1];
+  return majorMinor ? CURSOR_ELECTRON_BY_VERSION[majorMinor] : undefined;
 }
 
 function editorPackageCandidates(target) {
@@ -75,9 +101,7 @@ function editorPackageCandidates(target) {
 }
 
 function resolveElectronVersion(target = 'vscode') {
-  const normalizedTarget = target === 'all' ? 'vscode' : target;
-
-  for (const pkgPath of editorPackageCandidates(normalizedTarget)) {
+  for (const pkgPath of editorPackageCandidates(target)) {
     if (!fs.existsSync(pkgPath)) {
       continue;
     }
@@ -93,30 +117,83 @@ function resolveElectronVersion(target = 'vscode') {
     const productPath = path.join(path.dirname(pkgPath), 'product.json');
     if (fs.existsSync(productPath)) {
       const product = readJson(productPath);
+      if (target === 'cursor') {
+        const mapped = electronFromCursorVersion(product.version);
+        if (mapped) {
+          console.log(`Mapped Cursor ${product.version} -> Electron ${mapped}`);
+          return mapped;
+        }
+      }
+
       const vscodeVersion = product.vscodeVersion || product.version;
       const mapped = electronFromVscodeVersion(vscodeVersion);
       if (mapped) {
-        console.log(`Mapped ${pkg.name} vscode ${vscodeVersion} -> Electron ${mapped}`);
+        console.log(`Mapped ${pkg.name || target} vscode ${vscodeVersion} -> Electron ${mapped}`);
         return mapped;
       }
     }
   }
 
-  const fallback = '37.7.0';
-  console.log(`Editor Electron not detected, using fallback ${fallback}`);
+  const fallback = FALLBACK_ELECTRON[target] || FALLBACK_ELECTRON.vscode;
+  console.log(`Editor Electron not detected for ${target}, using fallback ${fallback}`);
   return fallback;
 }
 
-function main() {
-  const target = process.argv[2] || 'vscode';
-  const electronVersion = resolveElectronVersion(target);
+function getAbi(electronVersion) {
+  const nodeAbi = require('node-abi');
+  return nodeAbi.getAbi(electronVersion, 'electron');
+}
 
-  console.log(`Rebuilding better-sqlite3 for Electron ${electronVersion} (target: ${target})...`);
-
+function rebuildForElectron(electronVersion) {
+  console.log(`Rebuilding better-sqlite3 for Electron ${electronVersion}...`);
   execSync(
     `npx --yes @electron/rebuild --version=${electronVersion} --module-dir . -w better-sqlite3 -f`,
     { stdio: 'inherit', cwd: ROOT, env: process.env }
   );
+}
+
+function saveNativeBinary(electronVersion, label) {
+  if (!fs.existsSync(SQLITE_NODE)) {
+    throw new Error(`Expected native module at ${SQLITE_NODE}`);
+  }
+
+  const abi = getAbi(electronVersion);
+  const tag = `${process.platform}-${process.arch}-${abi}`;
+  const destDir = path.join(NATIVE_DIR, tag);
+  const dest = path.join(destDir, 'better_sqlite3.node');
+
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.copyFileSync(SQLITE_NODE, dest);
+  console.log(`Saved ${label} binary -> native/${tag}/better_sqlite3.node (ABI ${abi})`);
+}
+
+function resolveTargets(target) {
+  if (target === 'all') {
+    return [
+      { label: 'vscode', electronVersion: resolveElectronVersion('vscode') },
+      { label: 'cursor', electronVersion: resolveElectronVersion('cursor') },
+    ];
+  }
+
+  return [{ label: target, electronVersion: resolveElectronVersion(target) }];
+}
+
+function main() {
+  const target = process.argv[2] || 'all';
+  const targets = resolveTargets(target);
+  const built = new Map();
+
+  for (const entry of targets) {
+    if (built.has(entry.electronVersion)) {
+      console.log(
+        `Skipping duplicate Electron ${entry.electronVersion} for ${entry.label} (already built).`
+      );
+      continue;
+    }
+    built.set(entry.electronVersion, entry.label);
+    rebuildForElectron(entry.electronVersion);
+    saveNativeBinary(entry.electronVersion, entry.label);
+  }
 
   console.log('Electron rebuild complete.');
 }

@@ -20,9 +20,8 @@ PHASE2.md
 scripts/**
 
 # better-sqlite3: ship native binary + JS loader only
-node_modules/better-sqlite3/bin/**
 node_modules/better-sqlite3/build/**
-!node_modules/better-sqlite3/build/Release/better_sqlite3.node
+node_modules/better-sqlite3/bin/**
 node_modules/better-sqlite3/deps/**
 node_modules/better-sqlite3/src/**
 node_modules/better-sqlite3/binding.gyp

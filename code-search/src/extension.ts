@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { configureBetterSqlite3 } from './native/betterSqlite3';
 import { getConfig, workspaceHash } from './config';
 import { IndexManager } from './index/IndexManager';
 import {
@@ -42,6 +43,7 @@ let extensionContext: vscode.ExtensionContext | undefined;
 let indexingSettingsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  configureBetterSqlite3(context.extensionPath);
   extensionContext = context;
   logCpuInfo(context);
   registerCommands(context);
