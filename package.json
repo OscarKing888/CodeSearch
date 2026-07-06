@@ -2,7 +2,7 @@
   "name": "code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -41,7 +41,7 @@
         {
           "type": "webview",
           "id": "codeSearch.panel",
-          "name": "Search"
+          "name": "Ace Code Search"
         }
       ]
     },
@@ -355,7 +355,7 @@
     "cli": "node dist/cli.js"
   },
   "bin": {
-    "ess": "./dist/cli.js"
+    "ess": "dist/cli.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0"
@@ -369,6 +369,7 @@
     "esbuild": "^0.24.2",
     "minimatch": "^10.0.1",
     "sharp": "^0.35.3",
+    "ts-node": "^10.9.2",
     "typescript": "^5.7.2",
     "@vscode/vsce": "^3.7.1"
   }

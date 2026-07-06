@@ -2,6 +2,12 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
+## [0.1.7] - 2026-07-06
+
+### Changed
+- Changed to "Ace Code Search"
+- Fix github action build warning
+
 ## [0.1.6] - 2026-07-06
 
 ### Added
