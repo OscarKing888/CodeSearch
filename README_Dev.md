@@ -39,12 +39,12 @@ npm run build
 # 1. 更新 package.json 中的 version
 # 2. 更新 CHANGELOG.md
 git add package.json CHANGELOG.md
-git commit -m "chore: bump version to 0.1.7"
-git tag v0.1.7
+git commit -m "chore: bump version to 0.1.8"
+git tag v0.1.8
 git push origin main --tags
 ```
 
-标签版本须与 `package.json` 的 `version` 一致（如 tag `v0.1.7` 对应 version `0.1.7`）。
+标签版本须与 `package.json` 的 `version` 一致（如 tag `v0.1.8` 对应 version `0.1.8`）。
 
 也可在 GitHub **Actions → Release → Run workflow** 手动触发；可勾选是否发布到 Marketplace（仍需配置 `VSCE_PAT`）。
 

@@ -2,7 +2,7 @@
   "name": "code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",

@@ -1,0 +1,75 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import type BetterSqlite3 from 'better-sqlite3';
+
+type DatabaseConstructor = typeof BetterSqlite3;
+
+let DatabaseCtor: DatabaseConstructor | undefined;
+let extensionRoot: string | undefined;
+
+export type SqliteDatabase = BetterSqlite3.Database;
+export type SqliteStatement = BetterSqlite3.Statement;
+
+export function configureBetterSqlite3(root: string): void {
+  extensionRoot = root;
+}
+
+function listAvailableNativeBinaries(root: string): string[] {
+  const nativeDir = path.join(root, 'native');
+  if (!fs.existsSync(nativeDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(nativeDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+}
+
+function resolveNativeBinaryPath(root: string): string {
+  const abi = process.versions.modules;
+  const tag = `${process.platform}-${process.arch}-${abi}`;
+  const bundled = path.join(root, 'native', tag, 'better_sqlite3.node');
+
+  if (fs.existsSync(bundled)) {
+    return bundled;
+  }
+
+  const devBuild = path.join(
+    root,
+    'node_modules',
+    'better-sqlite3',
+    'build',
+    'Release',
+    'better_sqlite3.node'
+  );
+  if (fs.existsSync(devBuild)) {
+    return devBuild;
+  }
+
+  const available = listAvailableNativeBinaries(root);
+  throw new Error(
+    `No better_sqlite3 binary for Electron ABI ${abi} (${tag}). ` +
+      `Available builds: ${available.join(', ') || 'none'}. ` +
+      'Rebuild the extension with build.bat (or build.sh).'
+  );
+}
+
+function getDatabaseConstructor(): DatabaseConstructor {
+  if (!DatabaseCtor) {
+    // Dynamic require avoids bundling the native module into extension.js.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    DatabaseCtor = require('better-sqlite3') as DatabaseConstructor;
+  }
+  return DatabaseCtor;
+}
+
+export function openDatabase(
+  dbPath: string,
+  options?: BetterSqlite3.Options
+): SqliteDatabase {
+  const Database = getDatabaseConstructor();
+  const nativeBinding = extensionRoot ? resolveNativeBinaryPath(extensionRoot) : undefined;
+  const mergedOptions =
+    nativeBinding != null ? { ...options, nativeBinding } : options;
+  return new Database(dbPath, mergedOptions);
+}
