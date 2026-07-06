@@ -139,6 +139,8 @@ flowchart TB
 │   │   ├── FileWatcher.ts    # chokidar 监听
 │   │   ├── Autocreate.ts     # code-search.autocreate 解析
 │   │   └── schema.sql        # FTS5 表结构
+│   ├── native/
+│   │   └── betterSqlite3.ts  # native 模块加载与 Electron ABI 解析
 │   ├── search/
 │   │   ├── QueryParser.ts    # 解析 ext:/dir:/age:/loose: 等
 │   │   ├── SearchService.ts  # FTS5 MATCH + 后处理

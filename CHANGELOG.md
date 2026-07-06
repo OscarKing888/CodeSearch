@@ -2,10 +2,16 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
+## [0.1.9] - 2026-07-06
+
+### Fixed
+- CI: `rebuild-node.js` falls back to `npm rebuild better-sqlite3` when node-gyp path is missing on Linux
+- Restore search panel tab title to **Search** (container title remains Ace Code Search)
+
 ## [0.1.8] - 2026-07-06
 
-### Changed
-- fix: track src/native/betterSqlite3.ts; narrow native/ gitignore
+### Fixed
+- Track `src/native/betterSqlite3.ts` (was excluded by overly broad `native/` in `.gitignore`)
 
 ## [0.1.7] - 2026-07-06
 
@@ -13,9 +19,7 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Display name renamed to **Ace Code Search**
 - GitHub Actions: Node 24, native build deps, CI workflow fixes
 - Regenerated `package-lock.json` (fixed invalid `imurmurhash@0.1.6` entry causing `npm ci` 404)
-
-### Fixed
-- Add missing `src/native/betterSqlite3.ts` (was excluded by overly broad `native/` in `.gitignore`)
+- Documentation: Entrian references removed; independent development notice added (`README.md`, `README_en.md`, `README_Dev.md`)
 
 ## [0.1.6] - 2026-07-06
 
