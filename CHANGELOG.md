@@ -2,6 +2,10 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
+## [0.2.0] - 2026-07-06
+### Fixed
+- change name to Ace Code Search for marketplace
+
 ## [0.1.9] - 2026-07-06
 
 ### Fixed

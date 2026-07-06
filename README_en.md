@@ -2,6 +2,8 @@
 
 A VS Code extension that provides full-text code indexing and instant search powered by SQLite FTS5.
 
+![Ace Code Search screenshot](https://raw.githubusercontent.com/OscarKing888/CodeSearch/main/doc/AceCodeSearch.png)
+
 > **Independent Development Notice**
 >
 > This extension draws functional inspiration from the user experience of tools such as [Entrian Source Search](https://entrian.com/source-search/). However, all code, architecture, and implementation are independently designed and developed by this project. No third-party source code or proprietary assets were used. This project has no affiliation with or authorization from Entrian or its products.

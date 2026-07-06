@@ -1,8 +1,8 @@
 {
-  "name": "code-search",
+  "name": "ace-code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -349,7 +349,7 @@
     "rebuild:electron:vscode": "node scripts/rebuild-electron.js vscode",
     "rebuild:electron:cursor": "node scripts/rebuild-electron.js cursor",
     "rebuild:node": "node scripts/rebuild-node.js",
-    "package": "vsce package --baseContentUrl https://github.com/OscarKing888/CodeSearch",
+    "package": "vsce package --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
     "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/purgeStaleEntries.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js"

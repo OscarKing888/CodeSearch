@@ -168,16 +168,15 @@ CREATE TABLE files (
   mtime INTEGER NOT NULL,
   size INTEGER NOT NULL,
   ext TEXT,
-  dir TEXT
+  dir TEXT,
+  content TEXT NOT NULL DEFAULT ''
 );
 
--- FTS5 全文索引（content 外部存储模式节省空间）
+-- FTS5 全文索引
 CREATE VIRTUAL TABLE files_fts USING fts5(
   path UNINDEXED,
   content,
-  content='files',
-  content_rowid='id',
-  tokenize='porter unicode61'
+  tokenize='unicode61 remove_diacritics 0'
 );
 
 -- 词频表（自动补全）
@@ -246,7 +245,7 @@ CREATE TABLE tokens (
 
 ### 关键实现细节
 
-**1. 二进制检测**: 读取文件头 512 字节，检测 null 字节比例 > 30% 则跳过，自动排除二进制文件。
+**1. 二进制检测**: 读取文件头最多 8KB，检测 null 字节或不可打印字符比例 > 30%，或 UTF-8 替换字符过多，则跳过该文件。
 
 **2. 索引性能**: 批量事务（每 100 文件 commit 一次）；`IndexService` 在搜索/用户输入时暂停扫描（`pauseIndexing()`）。
 
@@ -255,6 +254,102 @@ CREATE TABLE tokens (
 **4. native 模块**: `better-sqlite3` 需针对 VS Code 内置 Node 版本预编译；在 `package.json` 的 `vscode:prepublish` 与 GitHub Actions 中处理跨平台 binary。
 
 **5. 与 VS Code 内置搜索的关系**: 本插件是**补充**而非替代——提供预索引全文搜索体验；不修改内置 Search 面板。
+
+## 索引与搜索算法
+
+本扩展采用 **SQLite FTS5 倒排全文索引**，不是向量/语义搜索，也不是自研搜索引擎。整体可概括为：预建索引 + FTS5 检索 + 自定义过滤与后处理。
+
+### 数据流概览
+
+```mermaid
+flowchart LR
+    Files[工作区文件] --> Scan[FileScanner 扫描过滤]
+    Scan --> Read[并发读文件内容]
+    Read --> DB[(SQLite)]
+    DB --> Meta[files 元数据表]
+    DB --> FTS[files_fts FTS5 倒排索引]
+    DB --> Tokens[tokens 词频表]
+    Watcher[chokidar 文件监视] --> Incremental[增量更新单文件]
+    Incremental --> DB
+    Query[用户查询] --> Parser[QueryParser]
+    Parser --> FTS
+    Parser --> Post[Loose / Fuzzy / Wildcard 后处理]
+    FTS --> Results[搜索结果]
+    Post --> Results
+```
+
+### 索引阶段（建库）
+
+实现位于 `src/index/IndexService.ts`、`FileScanner.ts`、`FileWatcher.ts`。
+
+**存储结构**（见 `src/index/schema.sql`）：
+
+| 表 | 作用 |
+|----|------|
+| `files` | 路径、mtime、大小、扩展名、目录、完整文件内容 |
+| `files_fts` | FTS5 虚拟表，对 `content` 建倒排索引 |
+| `tokens` | 词频统计，供搜索框自动补全 |
+
+FTS5 分词器（实际代码）：
+
+```sql
+tokenize='unicode61 remove_diacritics 0'
+```
+
+即 SQLite 内置 **unicode61** 按 Unicode 规则切词，不做 Porter 英文词干化。
+
+**扫描与过滤**（`FileScanner.ts`）：
+
+1. 递归遍历工作区（栈式 DFS）
+2. 按 `excludeGlobs`、目录名、文件大小等排除
+3. 扩展名白名单 + 二进制检测：
+   - 已知二进制扩展名直接跳过
+   - 读取文件头最多 8KB：null 字节 >30%、不可打印字符 >30%、UTF-8 替换字符过多 → 视为二进制
+4. 文本文件整文件读入，写入数据库
+
+**写入流程**（`IndexService.ts`）：
+
+1. **全量/增量**：对比 `mtime`，未变化文件跳过
+2. **批量事务**：每 100 个文件 commit 一次
+3. 每个文件：`INSERT/UPDATE files` → 更新 `files_fts`（先删后插）→ 用正则 `/[a-zA-Z_][a-zA-Z0-9_]*/g` 提取标识符写入 `tokens`（每文件最多 500 个，长度 ≥2）
+4. **并发读盘**：可配置 `codeSearch.indexThreads`；搜索时 `pause()` 索引以降低 IO 争抢
+5. **增量更新**：`chokidar` 监视文件增删改，单文件重索引
+
+数据库使用 WAL 模式（`journal_mode = WAL`），默认路径见上文「索引存储位置」。
+
+### 搜索阶段（查询）
+
+实现位于 `src/search/SearchService.ts`、`QueryParser.ts`。
+
+**标准搜索：FTS5 + BM25**
+
+1. `QueryParser` 解析查询词及 `ext:` / `dir:` / `file:` / `age:` 等过滤
+2. 将搜索词转为 FTS5 `MATCH` 语法（支持 `*` 前缀通配）
+3. 执行 `files_fts MATCH ?` 并与 `files` 表 JOIN
+4. FTS5 默认以 **BM25** 排序相关性
+5. 再按路径、扩展名、mtime、`+/-` 内容过滤等做 SQL 或内存过滤
+
+**高级模式**（FTS 之外的补充算法）：
+
+| 模式 | 做法 |
+|------|------|
+| **Loose 松散短语** | FTS 先筛候选文件，再用 token 间距算法在内存中找词距 ≤ N 的命中（`LooseSearch.ts`） |
+| **Fuzzy 模糊** | FTS 结果不足时，对候选内容做编辑距离匹配（`FuzzyMatch.ts`） |
+| **行内/跨行通配符** | FTS 粗筛 + `WildcardMatcher` 在内容上做模式匹配 |
+| **仅过滤** | 无搜索词时直接查 `files` 表，按路径/扩展名过滤 |
+
+### 与 VS Code 内置搜索的对比
+
+| | Ace Code Search | VS Code 内置搜索 |
+|--|-----------------|------------------|
+| 方式 | 预先索引（后台建库） | 实时 ripgrep 扫盘 |
+| 引擎 | SQLite FTS5 倒排索引 | ripgrep 正则 |
+| 大仓库 | 索引完成后查询通常更快 | 每次搜索扫文件 |
+| 存储 | 本地 `.db` 占磁盘 | 无持久索引 |
+
+### 一句话总结
+
+> 文件扫描过滤 → 全文存入 SQLite → **FTS5 unicode61 倒排索引（BM25 排序）** → 查询时 FTS MATCH + 元数据过滤 → 必要时 Loose / Fuzzy / Wildcard 内存后处理。
 
 ### 风险与缓解
 
