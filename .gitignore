@@ -143,3 +143,9 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# CodeSearch project specific
+native/
+*.vsix
+*.db
+.DS_Store

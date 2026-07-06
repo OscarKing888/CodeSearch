@@ -12,10 +12,6 @@ on:
         type: boolean
         default: true
 
-defaults:
-  run:
-    working-directory: code-search
-
 permissions:
   contents: write
 
@@ -32,7 +28,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: code-search/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - run: npm ci
       - run: npm run build
@@ -62,7 +58,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: code-search/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - run: npm ci
 
@@ -74,7 +70,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: code-search/native/
+          path: native/
           if-no-files-found: error
 
   package:
@@ -87,7 +83,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: code-search/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - uses: actions/download-artifact@v4
         with:
@@ -127,7 +123,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: code-search/${{ steps.vsix.outputs.path }}
+          files: ${{ steps.vsix.outputs.path }}
           generate_release_notes: true
 
       - name: Publish to VS Code Marketplace

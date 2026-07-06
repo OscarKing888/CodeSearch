@@ -18,7 +18,6 @@ chmod +x install.sh build.sh
 ### 手动命令
 
 ```bash
-cd code-search
 npm install
 npm run build
 # Press F5 in VS Code with launch.json
@@ -37,9 +36,9 @@ npm run build
 ### 发版步骤
 
 ```bash
-# 1. 更新 code-search/package.json 中的 version
+# 1. 更新 package.json 中的 version
 # 2. 更新 CHANGELOG.md
-git add code-search/package.json code-search/CHANGELOG.md
+git add package.json CHANGELOG.md
 git commit -m "chore: bump version to 0.1.7"
 git tag v0.1.7
 git push origin main --tags
@@ -125,7 +124,7 @@ flowchart TB
 ### 项目结构
 
 ```
-code-search/
+.
 ├── package.json
 ├── tsconfig.json
 ├── esbuild.js
