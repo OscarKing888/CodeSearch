@@ -1,9 +1,10 @@
 {
   "name": "code-search",
-  "displayName": "Code Search",
+  "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
   "version": "0.1.6",
-  "publisher": "local",
+  "publisher": "OscarKing888",
+  "license": "MIT",
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#E85D04",
@@ -30,7 +31,7 @@
       "panel": [
         {
           "id": "codeSearch",
-          "title": "Code Search",
+          "title": "Ace Code Search",
           "icon": "media/search.svg"
         }
       ]
@@ -47,55 +48,55 @@
     "commands": [
       {
         "command": "codeSearch.searchSelection",
-        "title": "Code Search: Search Selection or Word Under Cursor"
+        "title": "Ace Code Search: Search Selection or Word Under Cursor"
       },
       {
         "command": "codeSearch.focusSearch",
-        "title": "Code Search: Focus Search Box"
+        "title": "Ace Code Search: Focus Search Box"
       },
       {
         "command": "sourceSearch.searchSelection",
-        "title": "Code Search: Search Selection (legacy alias)"
+        "title": "Ace Code Search: Search Selection (legacy alias)"
       },
       {
         "command": "sourceSearch.focusSearch",
-        "title": "Code Search: Focus Search (legacy alias)"
+        "title": "Ace Code Search: Focus Search (legacy alias)"
       },
       {
         "command": "codeSearch.quickOpenFile",
-        "title": "Code Search: Quick Open File"
+        "title": "Ace Code Search: Quick Open File"
       },
       {
         "command": "codeSearch.nextHit",
-        "title": "Code Search: Next Hit"
+        "title": "Ace Code Search: Next Hit"
       },
       {
         "command": "codeSearch.prevHit",
-        "title": "Code Search: Previous Hit"
+        "title": "Ace Code Search: Previous Hit"
       },
       {
         "command": "codeSearch.refreshIndex",
-        "title": "Code Search: Refresh Index"
+        "title": "Ace Code Search: Refresh Index"
       },
       {
         "command": "codeSearch.manageIndexes",
-        "title": "Code Search: Manage Indexes"
+        "title": "Ace Code Search: Manage Indexes"
       },
       {
         "command": "codeSearch.openSettings",
-        "title": "Code Search: Open Settings"
+        "title": "Ace Code Search: Open Settings"
       },
       {
         "command": "codeSearch.openSecondaryIndex",
-        "title": "Code Search: Open Secondary Index"
+        "title": "Ace Code Search: Open Secondary Index"
       },
       {
         "command": "codeSearch.createIndex",
-        "title": "Code Search: Create Index"
+        "title": "Ace Code Search: Create Index"
       },
       {
         "command": "codeSearch.searchInNewTab",
-        "title": "Code Search: Search in New Tab"
+        "title": "Ace Code Search: Search in New Tab"
       }
     ],
     "keybindings": [
@@ -140,7 +141,7 @@
       }
     ],
     "configuration": {
-      "title": "Code Search",
+      "title": "Ace Code Search",
       "properties": {
         "codeSearch.excludeGlobs": {
           "type": "array",
@@ -348,7 +349,7 @@
     "rebuild:electron:vscode": "node scripts/rebuild-electron.js vscode",
     "rebuild:electron:cursor": "node scripts/rebuild-electron.js cursor",
     "rebuild:node": "node scripts/rebuild-node.js",
-    "package": "vsce package",
+    "package": "vsce package --baseContentUrl https://github.com/OscarKing888/CodeSearch",
     "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/purgeStaleEntries.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js"
@@ -368,6 +369,7 @@
     "esbuild": "^0.24.2",
     "minimatch": "^10.0.1",
     "sharp": "^0.35.3",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "@vscode/vsce": "^3.7.1"
   }
 }

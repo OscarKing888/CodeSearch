@@ -65,7 +65,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 function logCpuInfo(context: vscode.ExtensionContext): void {
   if (!outputChannel) {
-    outputChannel = vscode.window.createOutputChannel('Code Search');
+    outputChannel = vscode.window.createOutputChannel('Ace Code Search');
     context.subscriptions.push(outputChannel);
   }
   const cpuCount = getLogicalCpuCount();
@@ -101,10 +101,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
         rebuildSearchBindings();
       }
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Code Search: Refreshing indexes...' },
+        { location: vscode.ProgressLocation.Notification, title: 'Ace Code Search: Refreshing indexes...' },
         () => indexManager!.refreshAll(true)
       );
-      vscode.window.showInformationMessage('Code Search: Indexes refreshed.');
+      vscode.window.showInformationMessage('Ace Code Search: Indexes refreshed.');
     }),
     vscode.commands.registerCommand('codeSearch.manageIndexes', async () => {
       if (!(await ensureWorkspaceReady())) {
@@ -170,7 +170,7 @@ async function initializeWorkspace(context: vscode.ExtensionContext): Promise<vo
     initPromise = undefined;
     initializedWorkspaceHash = undefined;
     const message = err instanceof Error ? err.message : String(err);
-    vscode.window.showErrorMessage(`Code Search: Failed to initialize — ${message}`);
+    vscode.window.showErrorMessage(`Ace Code Search: Failed to initialize — ${message}`);
     throw err;
   }
 }
@@ -210,7 +210,7 @@ async function doInitializeWorkspace(
       shouldStartIndexing = getConfig().indexOnStartup;
     } else {
       const choice = await vscode.window.showInformationMessage(
-        'Code Search: No index found for this workspace. Create one now?',
+        'Ace Code Search: No index found for this workspace. Create one now?',
         CREATE_INDEX_LABEL,
         SKIP_INDEX_LABEL
       );
@@ -253,7 +253,7 @@ async function doInitializeWorkspace(
   if (!statusBarItem) {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = 'codeSearch.focusSearch';
-    statusBarItem.tooltip = 'Code Search — click to focus';
+    statusBarItem.tooltip = 'Ace Code Search — click to focus';
     context.subscriptions.push(statusBarItem);
   }
 
@@ -270,7 +270,7 @@ async function doInitializeWorkspace(
 
 async function promptAndCreatePrimary(manager: IndexManager): Promise<boolean> {
   const choice = await vscode.window.showInformationMessage(
-    'Code Search: No index found for this workspace. Create one now?',
+    'Ace Code Search: No index found for this workspace. Create one now?',
     CREATE_INDEX_LABEL,
     SKIP_INDEX_LABEL
   );
@@ -345,7 +345,7 @@ async function ensureWorkspaceReady(): Promise<boolean> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
     const choice = await vscode.window.showInformationMessage(
-      'Code Search: Open a workspace folder to enable indexing.',
+      'Ace Code Search: Open a workspace folder to enable indexing.',
       'Open Folder'
     );
     if (choice === 'Open Folder') {
@@ -416,7 +416,7 @@ function searchSelection(): void {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      void vscode.window.showErrorMessage(`Code Search: ${message}`);
+      void vscode.window.showErrorMessage(`Ace Code Search: ${message}`);
     }
   })();
 }
@@ -443,7 +443,7 @@ async function runIndexingSettingsRefresh(): Promise<void> {
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'Code Search: Refreshing indexes after settings change...',
+      title: 'Ace Code Search: Refreshing indexes after settings change...',
     },
     () => indexManager!.refreshAll(true)
   );

@@ -4,7 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo ========================================
-echo  Code Search - 安装扩展 (.vsix)
+echo  Ace Code Search - 安装扩展 (.vsix)
 echo ========================================
 echo.
 
@@ -101,8 +101,8 @@ echo.
 echo ========================================
 echo  扩展安装成功。
 echo  请重启 VS Code / Cursor，然后搜索：
-echo    命令:  "Code Search"
+echo    命令:  "Ace Code Search"
 echo    设置:  "sourceSearch"
-echo    面板:  "Code Search" ^(底部^)
+echo    面板:  "Ace Code Search" ^(底部^)
 echo ========================================
 exit /b 0

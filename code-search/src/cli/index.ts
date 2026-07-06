@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Code Search CLI (ess) — index management from command line
+ * Ace Code Search CLI (ess) — index management from command line
  * Usage:
  *   node dist/cli.js create --root ./src --db ./index.db [--name MyIndex]
  *   node dist/cli.js update --db ./index.db [--root ./src] [--force]
@@ -108,7 +108,7 @@ async function cmdList(args: CliArgs): Promise<void> {
 }
 
 function printHelp(): void {
-  console.log(`Code Search CLI (ess)
+  console.log(`Ace Code Search CLI (ess)
 
 Commands:
   create   --root <dir> --db <file.db> [--name <name>]

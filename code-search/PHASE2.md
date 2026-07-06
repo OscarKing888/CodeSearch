@@ -14,7 +14,7 @@
 - [x] Multiple search result tabs with lock support
 - [x] Secondary read-only indexes for third-party libraries
 - [x] Index management UI (create/delete/move/rename)
-- [x] `source-search.autocreate` workspace config file
+- [x] `code-search.autocreate` workspace config file
 - [x] Directory mapping for shared indexes across machines
 - [x] CLI tool `ess` for CI/pre-indexing
 
@@ -27,15 +27,15 @@
 - `Alt+=` with selection — opens search in new tab
 
 **Secondary index**
-- Command: `Code Search: Open Secondary Index`
+- Command: `Ace Code Search: Open Secondary Index`
 - Results show `[IndexName]` badge; paths mapped via directory mappings
 
 **Manage indexes**
-- Command: `Code Search: Manage Indexes` or toolbar **⚙**
+- Command: `Ace Code Search: Manage Indexes` or toolbar **⚙**
 - Rename / move / map directories / attach / detach / delete
 
 **Autocreate** — place in workspace root or parent folder:
-- `source-search.autocreate` or `EntrianSourceSearch.autocreate`
+- `code-search.autocreate`
 - Empty file = default settings; or JSON:
 
 ```json

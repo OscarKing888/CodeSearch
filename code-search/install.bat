@@ -4,7 +4,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo ========================================
-echo  Code Search - Install Dependencies
+echo  Ace Code Search - Install Dependencies
 echo ========================================
 echo.
 

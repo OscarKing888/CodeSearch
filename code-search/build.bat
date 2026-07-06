@@ -4,7 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo ========================================
-echo  Code Search - Build Extension
+echo  Ace Code Search - Build Extension
 echo ========================================
 echo.
 

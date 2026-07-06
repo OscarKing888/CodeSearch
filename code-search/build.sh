@@ -7,7 +7,7 @@ cd "$SCRIPT_DIR"
 TARGET="${1:-all}"
 
 echo "========================================"
-echo " Code Search - Build Extension"
+echo " Ace Code Search - Build Extension"
 echo "========================================"
 echo
 

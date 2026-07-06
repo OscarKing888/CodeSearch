@@ -1,15 +1,19 @@
-# Code Search
+# Ace Code Search
 
-VS Code 扩展，对标 [Entrian Source Search](https://entrian.com/source-search/)，基于 SQLite FTS5 提供全文代码索引与即时搜索。
+VS Code 扩展，基于 SQLite FTS5 提供全文代码索引与即时搜索。
+
+> **独立开发声明**
+>
+> 本插件在功能理念上参考了 [Entrian Source Search](https://entrian.com/source-search/) 等全文代码搜索工具的用户体验，但代码、架构与实现均为本项目独立设计与开发，未使用任何第三方源代码或专有资产，与 Entrian 及其产品无任何关联或授权关系。
 
 详细开发说明见 [README_Dev.md](README_Dev.md)。
 
-## 功能对标清单
+## 功能清单
 
-基于 [Entrian 官网](https://entrian.com/source-search/)、[QuickStart](https://entrian.com/source-search/manual.html)、[搜索手册](https://entrian.com/source-search/doc-searching.html) 与 [索引手册](https://entrian.com/source-search/doc-indexing.html) 整理。✅ 表示已实现。
+✅ 表示已实现。
 
-| 类别 | Entrian 功能 | 状态 |
-|------|-------------|------|
+| 类别 | 功能 | 状态 |
+|------|------|------|
 | **索引** | 可配置根目录全文索引 | ✅ 工作区根目录 + `code-search.autocreate` 指定根目录 |
 | | 多根目录 / 二级只读索引 / 目录映射 | ✅ 二级索引 + 路径映射 |
 | | 增量更新（文件监视器） | ✅ chokidar 实时更新 |
@@ -23,8 +27,8 @@ VS Code 扩展，对标 [Entrian Source Search](https://entrian.com/source-searc
 | | 强制刷新 | ✅ 命令面板全量刷新 |
 | | changed-only / all-files 分模式刷新 | ⬜ 待实现 |
 | | 索引管理（创建 / 删除 / 移动 / 重命名） | ✅ 专属管理面板（编辑器标签页） |
-| | `EntrianSourceSearch.autocreate` / `code-search.autocreate` | ✅ JSON 自动创建 |
-| | CLI 索引工具（ess） | ✅ `ess.bat` / `npm run cli` |
+| | `code-search.autocreate` 配置文件 | ✅ JSON 自动创建 |
+| | Ace Code Search CLI | ✅ `npm run cli` / `ess.bat` |
 | **搜索** | 单词 / 多词 / 短语 | ✅ |
 | | 通配符 `*`（单词级） | ✅ |
 | | 通配符（行内 / 跨行）`"this * that"` / `"this *:100 that"` | ✅ |

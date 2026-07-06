@@ -7,7 +7,7 @@ cd "$SCRIPT_DIR"
 TARGET="${1:-all}"
 
 echo "========================================"
-echo " Code Search - Install Extension (.vsix)"
+echo " Ace Code Search - Install Extension (.vsix)"
 echo "========================================"
 echo
 
@@ -79,7 +79,7 @@ echo
 echo "========================================"
 echo " Extension installed successfully."
 echo " Restart VS Code / Cursor, then search:"
-echo "   Commands:  \"Code Search\""
+echo "   Commands:  \"Ace Code Search\""
 echo "   Settings:  \"sourceSearch\""
-echo "   Panel tab: \"Code Search\" (bottom)"
+echo "   Panel tab: \"Ace Code Search\" (bottom)"
 echo "========================================"

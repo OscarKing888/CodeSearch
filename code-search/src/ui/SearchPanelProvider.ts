@@ -317,7 +317,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     preview: boolean
   ): Promise<void> {
     if (isBinaryExtension(path)) {
-      void vscode.window.showWarningMessage(`Code Search: 无法打开二进制文件 ${path}`);
+      void vscode.window.showWarningMessage(`Ace Code Search: 无法打开二进制文件 ${path}`);
       return;
     }
     const uri = vscode.Uri.file(path);
@@ -387,7 +387,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Code Search</title>
+  <title>Ace Code Search</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -706,7 +706,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     </span>
     <button class="btn" id="btnRefresh" title="Refresh index">⟳</button>
     <button class="btn" id="btnManage" title="Manage indexes">⚙</button>
-    <button class="btn" id="btnSettings" title="Open Code Search settings">Set</button>
+    <button class="btn" id="btnSettings" title="Open Ace Code Search settings">Set</button>
   </div>
   <div class="status-bar">
     <span id="statusHits">Ready</span>
