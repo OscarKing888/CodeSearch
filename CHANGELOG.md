@@ -5,8 +5,9 @@ All notable changes to the Ace Code Search extension are documented in this file
 ## [0.1.7] - 2026-07-06
 
 ### Changed
-- Changed to "Ace Code Search"
-- Fix github action build warning
+- Display name renamed to **Ace Code Search**
+- GitHub Actions: Node 24, native build deps, CI workflow fixes
+- Regenerated `package-lock.json` (fixed invalid `imurmurhash@0.1.6` entry causing `npm ci` 404)
 
 ## [0.1.6] - 2026-07-06
 
