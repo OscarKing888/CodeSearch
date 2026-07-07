@@ -666,12 +666,17 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       white-space: nowrap;
       max-width: 140px;
       overflow: hidden;
+    }
+    .tab-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
       text-overflow: ellipsis;
     }
     .tab:hover { background: var(--vscode-list-hoverBackground); }
     .tab.active { background: var(--vscode-list-activeSelectionBackground); }
-    .tab.locked::after { content: '🔒'; font-size: 9px; margin-left: 2px; }
     .tab-close, .tab-lock, .tab-new {
+      flex-shrink: 0;
       padding: 2px 6px;
       font-size: 11px;
       cursor: pointer;

@@ -10,6 +10,19 @@ A VS Code extension that provides full-text code indexing and instant search pow
 
 For detailed development notes, see [README_Dev.md](README_Dev.md).
 
+## Performance
+
+Ace Code Search uses **pre-indexed, persistent full-text search**. For repeated searches in large repositories, it is typically faster than VS Code’s built-in on-demand disk scan.
+
+- **SQLite FTS5 inverted index**: Files are indexed in the background; queries use `MATCH` with **BM25** relevance ranking instead of scanning the whole tree every time
+- **Search while indexing**: On first open of a large workspace, you can search before indexing reaches 100%; status bar and toolbar show Scanning / Indexing / Up to date
+- **Incremental updates**: `chokidar` watches file changes; unchanged files are skipped via `mtime`; add/change/delete triggers per-file re-indexing
+- **Index/search coordination**: Indexing pauses while you search to reduce IO contention; batch commits (every 100 files) and configurable **multi-threaded reads** (`codeSearch.indexThreads`) speed up initial builds
+- **Local persistence**: Indexes live in a SQLite database under `globalStorage` (WAL mode), so restarts do not require a full rebuild unless you force refresh or files changed
+- **Configurable excludes**: Defaults skip `node_modules`, `dist`, binaries, and more to keep indexes smaller and builds shorter
+
+Compared to built-in search: built-in is fine for ad-hoc, small-scope lookups; this extension targets **frequent symbol and full-text search**, with sub-second results common once indexing is warm. See [README_Dev.md — Indexing & search algorithm](README_Dev.md#索引与搜索算法).
+
 ## Feature List
 
 ✅ = implemented.

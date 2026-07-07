@@ -2,7 +2,7 @@
   "name": "ace-code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -307,18 +307,10 @@
             21,
             22,
             23,
-            24,
-            25,
-            26,
-            27,
-            28,
-            29,
-            30,
-            31,
-            32
+            24
           ],
           "enumItemLabels": [
-            "自动（本机 32 线程）",
+            "自动（本机 24 线程）",
             "1 线程",
             "2 线程",
             "3 线程",
@@ -342,17 +334,9 @@
             "21 线程",
             "22 线程",
             "23 线程",
-            "24 线程",
-            "25 线程",
-            "26 线程",
-            "27 线程",
-            "28 线程",
-            "29 线程",
-            "30 线程",
-            "31 线程",
-            "32 线程（全部）"
+            "24 线程（全部）"
           ],
-          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (32 detected at build time; runtime auto always uses live CPU count)."
+          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (24 detected at build time; runtime auto always uses live CPU count)."
         }
       }
     }

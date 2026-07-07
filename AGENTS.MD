@@ -69,6 +69,13 @@
   - `bump-version.bat 0.2.1 --notes "Fix Electron ABI 146 native packaging."`
 - The script updates `package.json`, `package-lock.json`, and inserts a new top changelog section if it does not already exist. It does not commit, tag, build, or publish.
 
+## Search panel webview UI
+
+- Search result tabs are rendered in `src/ui/webview/main.ts` with inline styles from `src/ui/SearchPanelProvider.ts`.
+- Lock state is shown only via the JS `.tab-lock` element (`🔒` / `🔓`). Do not add a CSS `::after` lock on `.tab.locked`; that duplicates the icon.
+- Tab layout uses `.tab-label` (`flex: 1; min-width: 0`) for ellipsis, and `.tab-lock` / `.tab-close` use `flex-shrink: 0` so long labels do not clip the lock or close controls.
+- Locked tabs intentionally hide the close button; unlock first to close.
+
 ## Release documentation
 
 - `README_Dev.md` contains the release SOP, including Marketplace Publisher setup, Azure DevOps PAT creation, GitHub `VSCE_PAT` secret setup, and publish troubleshooting.

@@ -222,11 +222,14 @@ function renderTabs(): void {
     const el = document.createElement('div');
     el.className = 'tab' + (tab.id === activeTabId ? ' active' : '') + (tab.locked ? ' locked' : '');
     el.title = tab.query;
-    el.textContent = tab.label;
 
     el.addEventListener('click', () => {
       switchTab(tab.id);
     });
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'tab-label';
+    labelEl.textContent = tab.label;
 
     const lockBtn = document.createElement('span');
     lockBtn.className = 'tab-lock';
@@ -246,6 +249,7 @@ function renderTabs(): void {
       closeTab(tab.id);
     });
 
+    el.appendChild(labelEl);
     el.appendChild(lockBtn);
     if (tabs.length > 1 && !tab.locked) {
       el.appendChild(closeBtn);

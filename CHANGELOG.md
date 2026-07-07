@@ -2,6 +2,11 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
+## [0.2.2] - 2026-07-07
+
+### Changed
+- Fix tab page icon error.
+
 ## [0.2.1] - 2026-07-07
 
 ### Changed
