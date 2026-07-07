@@ -599,6 +599,11 @@ function openHitFile(hit: HitPayload, preview: boolean): void {
   });
 }
 
+function getFileName(filePath: string): string {
+  const parts = filePath.split(/[/\\]/);
+  return parts[parts.length - 1] || filePath;
+}
+
 function getSortedIndices(
   hits: HitPayload[],
   column: SortColumn,
@@ -786,8 +791,9 @@ function renderResults(result: SearchResultPayload, selectedIndex = -1): void {
 
     const pathTd = document.createElement('td');
     pathTd.className = 'col-path';
-    pathTd.textContent = hit.relativePath + badge;
-    pathTd.title = hit.relativePath + badge;
+    const fullPath = hit.relativePath + badge;
+    pathTd.textContent = getFileName(hit.relativePath) + badge;
+    pathTd.title = fullPath;
 
     const lineTd = document.createElement('td');
     lineTd.className = 'col-line';

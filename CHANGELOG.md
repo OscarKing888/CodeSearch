@@ -2,6 +2,11 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
+## [0.2.3] - 2026-07-07
+
+### Changed
+- Only display file name in search results
+
 ## [0.2.2] - 2026-07-07
 
 ### Changed
