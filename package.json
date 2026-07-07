@@ -2,7 +2,7 @@
   "name": "ace-code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -307,10 +307,18 @@
             21,
             22,
             23,
-            24
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32
           ],
           "enumItemLabels": [
-            "自动（本机 24 线程）",
+            "自动（本机 32 线程）",
             "1 线程",
             "2 线程",
             "3 线程",
@@ -334,9 +342,17 @@
             "21 线程",
             "22 线程",
             "23 线程",
-            "24 线程（全部）"
+            "24 线程",
+            "25 线程",
+            "26 线程",
+            "27 线程",
+            "28 线程",
+            "29 线程",
+            "30 线程",
+            "31 线程",
+            "32 线程（全部）"
           ],
-          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (24 detected at build time; runtime auto always uses live CPU count)."
+          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (32 detected at build time; runtime auto always uses live CPU count)."
         }
       }
     }
@@ -349,7 +365,9 @@
     "rebuild:electron:vscode": "node scripts/rebuild-electron.js vscode",
     "rebuild:electron:cursor": "node scripts/rebuild-electron.js cursor",
     "rebuild:node": "node scripts/rebuild-node.js",
-    "package": "vsce package --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
+    "validate:native": "node scripts/validate-native-artifacts.js",
+    "version:bump": "node scripts/bump-version.js",
+    "package": "vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
     "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/purgeStaleEntries.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js"

@@ -1,12 +1,17 @@
 .vscode/**
 .vscode-test/**
+.github/**
+.tools/**
 src/**
 .gitignore
+AGENTS.MD
 esbuild.js
 tsconfig.json
 test/**
 **/*.ts
 **/*.map
+bump-version.bat
+desktop.ini
 install.bat
 install.sh
 build.bat

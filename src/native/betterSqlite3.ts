@@ -50,7 +50,8 @@ function resolveNativeBinaryPath(root: string): string {
   throw new Error(
     `No better_sqlite3 binary for Electron ABI ${abi} (${tag}). ` +
       `Available builds: ${available.join(', ') || 'none'}. ` +
-      'Rebuild the extension with build.bat (or build.sh).'
+      'This extension package does not include the native binary for this Electron ABI. ' +
+      'Install a newer Ace Code Search package that includes this ABI, or rebuild from source with Node.js 20+ using build.bat (or build.sh).'
   );
 }
 

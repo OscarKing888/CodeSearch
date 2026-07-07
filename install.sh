@@ -10,9 +10,11 @@ echo "========================================"
 echo
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "[ERROR] Node.js not found. Install Node.js 18+ (https://nodejs.org/) or use: brew install node"
+  echo "[ERROR] Node.js not found. Install Node.js 20+ (https://nodejs.org/) or use: brew install node"
   exit 1
 fi
+
+node "$SCRIPT_DIR/scripts/check-node-version.js"
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "[ERROR] npm not found."

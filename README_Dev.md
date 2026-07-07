@@ -29,9 +29,102 @@ npm run build
 
 ### 一次性准备
 
-1. 在 [Marketplace 管理页](https://marketplace.visualstudio.com/manage) 创建 Publisher，确保 `package.json` 中的 `publisher` 字段与之匹配。
-2. 在 Azure DevOps 创建 PAT（Organization 选 **All accessible organizations**，Scope：**Marketplace → Manage**）。
-3. 在 GitHub 仓库 **Settings → Secrets and variables → Actions** 中添加 `VSCE_PAT`。
+下面是从 0 开始配置 VS Code Marketplace 发布权限的 SOP。只需要做一次；之后发版由 GitHub Actions 读取 `VSCE_PAT` 自动发布。
+
+#### 0. 准备账号与权限
+
+1. 使用同一个 Microsoft 账号登录：
+   - Visual Studio Marketplace: <https://marketplace.visualstudio.com/manage>
+   - Azure DevOps: <https://dev.azure.com/>
+2. 如果浏览器里同时登录了多个 Microsoft/Azure 账号，建议用无痕窗口重新登录，避免 Marketplace 和 Azure DevOps 使用不同身份。
+3. PAT 属于创建它的用户账号。后续该账号必须对目标 Marketplace Publisher 有发布权限，否则 token 本身正确也会发布失败。
+4. 注意：VS Code 官方文档提示 Azure DevOps global PAT 会在 2026-12-01 退役；当前仍按 PAT 配置，后续需要迁移到 Microsoft Entra ID/托管身份发布方案。
+
+#### 1. 创建 Azure DevOps 组织（如果还没有）
+
+1. 打开 <https://dev.azure.com/>。
+2. 如果提示创建组织，按向导创建一个 Azure DevOps Organization。
+3. Organization 名称不需要和 Marketplace Publisher ID 一样；PAT 只需要能访问 Marketplace scope。
+4. 创建完成后进入组织首页，地址通常是：
+
+```text
+https://dev.azure.com/<Your_Organization>
+```
+
+#### 2. 创建 PAT
+
+1. 进入 Azure DevOps 组织首页后，优先直接打开 PAT 页面：
+
+```text
+https://dev.azure.com/<Your_Organization>/_usersSettings/tokens
+```
+
+2. 也可以从页面右上角进入：在蓝色顶栏点击 **User settings** 用户设置图标（通常是“人像 + 齿轮/设置”的图标，在问号帮助图标右侧、账号名或圆形头像左侧），然后选择 **Personal access tokens**。
+3. 注意不要点击最右侧圆形头像或账号名弹层；那个菜单通常只显示 Microsoft 账号、切换目录、切换账号和注销。如果只看到这些选项，说明点到的是账号菜单，关闭弹层后改点它左侧的 **User settings** 图标，或者直接使用上面的 URL。
+4. 点击 **+ New Token**。
+5. 按以下字段填写：
+   - **Name**: `ace-code-search-marketplace-publish`。
+   - **Organization**: 选 **All accessible organizations**。
+   - **Expiration**: 建议 90 天、180 天或团队约定的轮换周期；不要选无期限。
+   - **Scopes**: 只勾选 **Marketplace → Manage**。
+6. 如果看不到 Marketplace scope：
+   - 点击 scope 面板底部的 **Show all scopes**。
+   - 确认当前账号已进入 Marketplace Publishing Portal，并且拥有 Publisher 权限。
+   - 如果公司 Azure DevOps 有 PAT policy，联系组织管理员允许创建对应 scope 的 PAT。
+7. 点击 **Create**。
+8. 立即复制生成的 token。PAT 只显示一次，关闭页面后无法再次查看。
+
+#### 3. 创建或确认 Marketplace Publisher
+
+1. 打开 [Visual Studio Marketplace Publishing Portal](https://marketplace.visualstudio.com/manage)。
+2. 使用创建 PAT 的同一个 Microsoft 账号登录。
+3. 如果还没有 Publisher，点击 **+ Create a publisher**。
+4. 填写 Publisher 信息：
+   - **ID**: 发布用的 Publisher ID；创建后不能修改。它必须和 `package.json` 的 `publisher` 完全一致。
+   - **Name**: 面向用户显示的名称。
+5. 本项目当前配置为：
+
+```json
+"publisher": "OscarKing888"
+```
+
+6. 如果 Portal 里实际 Publisher ID 不同，优先修改 `package.json`，并确认 Marketplace 上没有同名冲突。
+7. 本地可用 `vsce login` 验证 PAT 和 Publisher 是否匹配：
+
+```bash
+npx vsce login OscarKing888
+```
+
+8. 粘贴 PAT 后，如果提示 token verification succeeded，说明 Publisher 与 PAT 权限匹配。
+
+#### 4. 写入 GitHub Actions Secret
+
+1. 打开 GitHub 仓库页面。
+2. 进入 **Settings → Secrets and variables → Actions**。
+3. 点击 **New repository secret**。
+4. 填写：
+   - **Name**: `VSCE_PAT`
+   - **Secret**: 粘贴刚创建的 PAT
+5. 保存后不要把 PAT 写入代码、日志、Issue、PR 或本地文档。
+
+#### 5. 验证发布权限
+
+1. 在 GitHub 打开 **Actions → Release → Run workflow**。
+2. 首次验证可以取消 Marketplace 发布选项，只确认 VSIX 能正常打包。
+3. 确认无误后再次运行并启用 Marketplace 发布，或推送版本 tag 触发自动发布。
+4. 如果 workflow 日志出现 `VSCE_PAT not set`，说明 GitHub Secret 名称不对、未保存到当前仓库，或 workflow 运行环境没有读取到该 secret。
+5. 如果 Marketplace 发布报 401/403：
+   - 确认 PAT 没过期。
+   - 确认 PAT scope 是 **Marketplace → Manage**。
+   - 确认 `package.json` 的 `publisher` 等于 Marketplace Publisher ID。
+   - 确认创建 PAT 的 Microsoft 账号对该 Publisher 有发布权限。
+
+参考：
+
+- Azure DevOps PAT 创建文档：<https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate>
+- Marketplace Publisher 创建与发布概览：<https://learn.microsoft.com/en-us/azure/devops/extend/publish/overview>
+- VS Code 扩展发布文档：<https://code.visualstudio.com/api/working-with-extensions/publishing-extension>
+- 命令行发布与 PAT 说明：<https://learn.microsoft.com/en-us/azure/devops/extend/publish/command-line>
 
 ### 发版步骤
 

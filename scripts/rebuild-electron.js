@@ -46,9 +46,14 @@ const CURSOR_ELECTRON_BY_VERSION = {
   '3.7': '38.0.0',
 };
 
-const FALLBACK_ELECTRON = {
-  vscode: '37.7.0',
-  cursor: '40.0.0',
+const SUPPORTED_ELECTRON_TARGETS = {
+  vscode: [
+    { label: 'vscode-legacy', electronVersion: '37.7.0' },
+    { label: 'vscode-current', electronVersion: '42.0.0' },
+  ],
+  cursor: [
+    { label: 'cursor-current', electronVersion: '40.0.0' },
+  ],
 };
 
 function readJson(filePath) {
@@ -100,7 +105,7 @@ function editorPackageCandidates(target) {
   return candidates;
 }
 
-function resolveElectronVersion(target = 'vscode') {
+function detectElectronVersion(target = 'vscode') {
   for (const pkgPath of editorPackageCandidates(target)) {
     if (!fs.existsSync(pkgPath)) {
       continue;
@@ -134,9 +139,8 @@ function resolveElectronVersion(target = 'vscode') {
     }
   }
 
-  const fallback = FALLBACK_ELECTRON[target] || FALLBACK_ELECTRON.vscode;
-  console.log(`Editor Electron not detected for ${target}, using fallback ${fallback}`);
-  return fallback;
+  console.log(`Editor Electron not detected for ${target}; using fixed supported target set.`);
+  return undefined;
 }
 
 function getAbi(electronVersion) {
@@ -144,21 +148,37 @@ function getAbi(electronVersion) {
   return nodeAbi.getAbi(electronVersion, 'electron');
 }
 
-function rebuildForElectron(electronVersion) {
-  console.log(`Rebuilding better-sqlite3 for Electron ${electronVersion}...`);
+function getTargetArch() {
+  const targetArch =
+    process.env.npm_config_target_arch ||
+    process.env.npm_config_arch ||
+    process.arch;
+  return String(targetArch).trim() || process.arch;
+}
+
+function rebuildForElectron(electronVersion, targetArch) {
+  console.log(`Rebuilding better-sqlite3 for Electron ${electronVersion} (${process.platform}-${targetArch})...`);
   execSync(
-    `npx --yes @electron/rebuild --version=${electronVersion} --module-dir . -w better-sqlite3 -f`,
-    { stdio: 'inherit', cwd: ROOT, env: process.env }
+    `npx --yes @electron/rebuild --version=${electronVersion} --module-dir . -w better-sqlite3 -f --arch=${targetArch}`,
+    {
+      stdio: 'inherit',
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        npm_config_arch: targetArch,
+        npm_config_target_arch: targetArch,
+      },
+    }
   );
 }
 
-function saveNativeBinary(electronVersion, label) {
+function saveNativeBinary(electronVersion, label, targetArch) {
   if (!fs.existsSync(SQLITE_NODE)) {
     throw new Error(`Expected native module at ${SQLITE_NODE}`);
   }
 
   const abi = getAbi(electronVersion);
-  const tag = `${process.platform}-${process.arch}-${abi}`;
+  const tag = `${process.platform}-${targetArch}-${abi}`;
   const destDir = path.join(NATIVE_DIR, tag);
   const dest = path.join(destDir, 'better_sqlite3.node');
 
@@ -167,32 +187,55 @@ function saveNativeBinary(electronVersion, label) {
   console.log(`Saved ${label} binary -> native/${tag}/better_sqlite3.node (ABI ${abi})`);
 }
 
-function resolveTargets(target) {
+function supportedTargetsFor(target) {
   if (target === 'all') {
     return [
-      { label: 'vscode', electronVersion: resolveElectronVersion('vscode') },
-      { label: 'cursor', electronVersion: resolveElectronVersion('cursor') },
+      ...SUPPORTED_ELECTRON_TARGETS.vscode,
+      ...SUPPORTED_ELECTRON_TARGETS.cursor,
     ];
   }
 
-  return [{ label: target, electronVersion: resolveElectronVersion(target) }];
+  return SUPPORTED_ELECTRON_TARGETS[target] || [];
+}
+
+function resolveTargets(target) {
+  if (!['all', 'vscode', 'cursor'].includes(target)) {
+    throw new Error(`Unknown target "${target}". Expected all, vscode, or cursor.`);
+  }
+
+  const targets = [...supportedTargetsFor(target)];
+  const editorsToDetect = target === 'all' ? ['vscode', 'cursor'] : [target];
+
+  for (const editor of editorsToDetect) {
+    const electronVersion = detectElectronVersion(editor);
+    if (electronVersion) {
+      targets.push({ label: `${editor}-detected`, electronVersion });
+    }
+  }
+
+  return targets;
 }
 
 function main() {
   const target = process.argv[2] || 'all';
+  const targetArch = getTargetArch();
   const targets = resolveTargets(target);
   const built = new Map();
 
   for (const entry of targets) {
-    if (built.has(entry.electronVersion)) {
+    const abi = getAbi(entry.electronVersion);
+    const buildKey = `${process.platform}-${targetArch}-${abi}`;
+
+    if (built.has(buildKey)) {
       console.log(
-        `Skipping duplicate Electron ${entry.electronVersion} for ${entry.label} (already built).`
+        `Skipping duplicate ${buildKey} for ${entry.label} (already built from ${built.get(buildKey)}).`
       );
       continue;
     }
-    built.set(entry.electronVersion, entry.label);
-    rebuildForElectron(entry.electronVersion);
-    saveNativeBinary(entry.electronVersion, entry.label);
+
+    built.set(buildKey, entry.label);
+    rebuildForElectron(entry.electronVersion, targetArch);
+    saveNativeBinary(entry.electronVersion, entry.label, targetArch);
   }
 
   console.log('Electron rebuild complete.');

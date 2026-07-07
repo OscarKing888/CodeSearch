@@ -2,7 +2,13 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
+## [0.2.1] - 2026-07-07
+
+### Changed
+- Fix Electron ABI 146 native packaging.
+
 ## [0.2.0] - 2026-07-06
+
 ### Fixed
 - change name to Ace Code Search for marketplace
 

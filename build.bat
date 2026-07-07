@@ -8,14 +8,22 @@ echo  Ace Code Search - Build Extension
 echo ========================================
 echo.
 
+del *.vsix
+
 set "TARGET=%~1"
 if /i "%TARGET%"=="" set "TARGET=all"
 
-where node >nul 2>&1
+set "ACS_NODE_ENV=%TEMP%\ace-code-search-node-%RANDOM%%RANDOM%.cmd"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\ensure-node.ps1" -Root "%CD%" -CmdFile "%ACS_NODE_ENV%"
 if errorlevel 1 (
-    echo [ERROR] Node.js not found.
+    echo [ERROR] Could not prepare a compatible Node.js runtime.
     exit /b 1
 )
+call "%ACS_NODE_ENV%"
+del "%ACS_NODE_ENV%" >nul 2>&1
+
+node "%~dp0scripts\check-node-version.js"
+if errorlevel 1 exit /b 1
 
 if not exist "node_modules\" (
     echo node_modules not found. Running install.bat...
@@ -56,7 +64,7 @@ if errorlevel 1 (
 
 echo.
 echo [4/4] Packaging VSIX...
-call npx --yes @vscode/vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch
+call npm run package
 if errorlevel 1 (
     echo [ERROR] vsce package failed.
     exit /b 1
@@ -83,4 +91,4 @@ echo  Install: run 安装CodeSearch.bat
 echo ========================================
 exit /b 0
 
-call "%~dp0安装CodeSearch.bat"
+::call "%~dp0安装CodeSearch.bat"

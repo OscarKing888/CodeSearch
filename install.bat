@@ -8,11 +8,17 @@ echo  Ace Code Search - Install Dependencies
 echo ========================================
 echo.
 
-where node >nul 2>&1
+set "ACS_NODE_ENV=%TEMP%\ace-code-search-node-%RANDOM%%RANDOM%.cmd"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\ensure-node.ps1" -Root "%CD%" -CmdFile "%ACS_NODE_ENV%"
 if errorlevel 1 (
-    echo [ERROR] Node.js not found. Please install Node.js 18+ from https://nodejs.org/
+    echo [ERROR] Could not prepare a compatible Node.js runtime.
     exit /b 1
 )
+call "%ACS_NODE_ENV%"
+del "%ACS_NODE_ENV%" >nul 2>&1
+
+node "%~dp0scripts\check-node-version.js"
+if errorlevel 1 exit /b 1
 
 where npm >nul 2>&1
 if errorlevel 1 (
@@ -35,6 +41,8 @@ call npm install
 if errorlevel 1 (
     echo.
     echo [ERROR] npm install failed.
+    echo        If the npm log shows EINTEGRITY, run: npm cache clean --force
+    echo        Then retry install.bat or build.bat with Node.js 20+.
     exit /b 1
 )
 
