@@ -16,6 +16,12 @@ import { IndexingSettings } from '../indexingSettings';
 import { FileWatcher } from './FileWatcher';
 import { mapWithConcurrency } from './concurrency';
 import { resolveIndexThreadCount } from './threadCount';
+import {
+  counterpartExts,
+  extFromPath,
+  FileCandidate,
+  rankCounterparts,
+} from '../pairing/headerSourcePairing';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS files (
@@ -380,6 +386,36 @@ export class IndexService extends EventEmitter {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  fileExistsInIndex(filePath: string): boolean {
+    if (!this.getFileMtimeStmt) {
+      return false;
+    }
+    if (this.getFileMtimeStmt.get(filePath)) {
+      return true;
+    }
+    const resolved = path.resolve(filePath);
+    return resolved !== filePath && !!this.getFileMtimeStmt.get(resolved);
+  }
+
+  findHeaderSourceCounterparts(filePath: string): string[] {
+    if (!this.db) {
+      return [];
+    }
+
+    const ext = extFromPath(filePath);
+    const counterparts = counterpartExts(ext);
+    if (counterparts.length === 0) {
+      return [];
+    }
+
+    const placeholders = counterparts.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT path, ext, dir FROM files WHERE ext IN (${placeholders})`)
+      .all(...counterparts) as FileCandidate[];
+
+    return rankCounterparts(filePath, rows);
   }
 
   getTokenSuggestions(prefix: string, limit = 20): Array<{ token: string; freq: number }> {

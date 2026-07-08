@@ -324,6 +324,7 @@ CREATE TABLE tokens (
 | `codeSearch.quickOpenFile` | `Shift+Alt+F` | 文件过滤模式 |
 | `codeSearch.nextHit` | `Ctrl+Alt+]` | 下一命中（面板内聚焦时） |
 | `codeSearch.prevHit` | `Ctrl+Alt+[` | 上一命中（面板内聚焦时） |
+| `codeSearch.switchHeaderSource` | `Alt+O` | 在索引中查找并切换头/源文件（C/C++ 扩展名） |
 | `codeSearch.refreshIndex` | — | 强制重建索引 |
 
 ### 配置项
@@ -452,6 +453,7 @@ tokenize='unicode61 remove_diacritics 0'
 | 超大仓库首次索引耗时长 | 边索引边搜索 + 进度条 + 可配置排除 |
 | FTS5 不支持全部复杂通配符语义 | 复杂通配符走 SQL 过滤 + 内存后匹配 |
 | F8 / Shift+Alt+方向键 与内置快捷键冲突 | 默认 `Ctrl+Alt+]` / `Ctrl+Alt+[`；仅面板 webview 聚焦时生效；可自定义 |
+| `Alt+O` 与其它扩展头/源切换冲突 | 扩展默认解绑旧命令；启动时自动迁移用户 `keybindings.json` 中的 Alt+O 旧绑定，并持续劫持 `C_Cpp.SwitchHeaderSource` / `clangd.switchheadersource` |
 
 ### 参考
 

@@ -10,6 +10,15 @@ A VS Code extension that provides full-text code indexing and instant search pow
 
 For detailed development notes, see [README_Dev.md](README_Dev.md).
 
+## Header / Source Switch (Alt+O)
+
+After **C/C++ files are indexed**, press **`Alt+O`** to switch between paired `.h` / `.cpp` (and `.hpp`, `.cc`, etc.) without relying on C/C++ Tools or clangd header/source switching.
+
+- **Index-based**: counterpart files must exist in the indexed `files` table; otherwise you see “counterpart not found in index”
+- **Pairing priority**: same directory + stem → UE-style `Public` ↔ `Private` folders → other directories (closest path wins)
+- **Command**: `codeSearch.switchHeaderSource` (Ace Code Search: Switch Header/Source)
+- **Shortcut conflicts**: on activation the extension auto-migrates user `keybindings.json` entries that still bind Alt+O to `C_Cpp.SwitchHeaderSource` / `clangd.switchheadersource`, and keeps overriding those legacy command IDs
+
 ## Performance
 
 Ace Code Search uses **pre-indexed, persistent full-text search**. For repeated searches in large repositories, it is typically faster than VS Code’s built-in on-demand disk scan.
@@ -67,6 +76,7 @@ Compared to built-in search: built-in is fine for ad-hoc, small-scope lookups; t
 | **Navigation** | Search word under cursor / selection | ✅ `Alt+=` |
 | | Ctrl+Alt+] / Ctrl+Alt+[ next/previous hit | ✅ |
 | | Shift+Alt+F quick open file | ✅ |
+| | Alt+O header/source switch (index-based) | ✅ |
 | | Click to open / preview | ✅ Preview |
 | | Auto-open single hit | ✅ Configurable via `autoOpenSingleHit` |
 
@@ -79,6 +89,7 @@ Legend: ✅ Done · 🟡 Partial · ⬜ Planned
 | Search Selection | `Alt+=` |
 | Focus Search | `Shift+Alt+=` |
 | Quick Open File | `Shift+Alt+F` |
+| Switch Header/Source | `Alt+O` |
 | Next Hit | `Ctrl+Alt+]` |
 | Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | Command palette |

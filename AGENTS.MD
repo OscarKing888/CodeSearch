@@ -77,6 +77,17 @@
 - Locked tabs intentionally hide the close button; unlock first to close.
 - Result row copy format: `{absolutePath}:{line}\t{lineText}` via right-click **Copy** / **Copy All**. Clipboard writes go through `copyToClipboard` postMessage and `vscode.env.clipboard.writeText` in `SearchPanelProvider.ts` (not `navigator.clipboard` in the webview).
 - **Copy All** uses the active tab's loaded hits in current table sort order, newline-separated.
+- Hide the result context menu (`hideResultContextMenu`) when switching tabs or creating a new tab so `contextMenuHitIndex` cannot go stale across tab changes.
+
+## Header/Source pairing
+
+- Pairing uses indexed `files` rows (`path`, `ext`, `dir`); counterparts must exist in the index — no filesystem fallback.
+- Logic lives in `src/pairing/headerSourcePairing.ts`; `IndexService.findHeaderSourceCounterparts()` runs the SQL query.
+- Priority: same `dir` + stem, then UE-style `Public` ↔ `Private` dir swap, then other dirs by path distance.
+- Command `codeSearch.switchHeaderSource` is bound to `Alt+O` for C/C++ extensions; package.json unbinds `C_Cpp.SwitchHeaderSource` and `clangd.switchheadersource` on the same key.
+- `registerHeaderSourceCommandOverrides()` re-registers handlers for `C_Cpp.SwitchHeaderSource` and `clangd.switchheadersource` after C/C++ extensions activate.
+- `migrateUserHeaderSourceKeybindings()` runs on extension activate; if user `keybindings.json` still binds Alt+O to a legacy command, rewrite it to `codeSearch.switchHeaderSource` and insert unbind entries for the old commands.
+- Do not dispose prior command overrides on refresh; disposing restores the cpptools handler. Re-register the same command IDs instead.
 
 ## Release documentation
 

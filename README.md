@@ -10,6 +10,15 @@ VS Code 扩展，基于 SQLite FTS5 提供全文代码索引与即时搜索。
 
 详细开发说明见 [README_Dev.md](README_Dev.md)。
 
+## 头/源文件切换（Alt+O）
+
+在 **C/C++ 文件已建立索引** 后，按 **`Alt+O`** 可在配对的 `.h` / `.cpp`（及 `.hpp`、`.cc` 等）之间切换打开，无需再依赖 C/C++ Tools 或 clangd 的头源切换。
+
+- **索引驱动**：配对文件必须出现在索引的 `files` 表中；未索引则提示「索引中未找到配对文件」
+- **配对优先级**：同目录同名 stem → UE 风格 `Public` ↔ `Private` 目录 → 其它目录（路径最近优先）
+- **命令**：`codeSearch.switchHeaderSource`（Ace Code Search: Switch Header/Source）
+- **快捷键冲突**：扩展启动时会自动迁移用户 `keybindings.json` 里仍指向 `C_Cpp.SwitchHeaderSource` / `clangd.switchheadersource` 的 Alt+O 绑定，并持续劫持上述旧命令 ID
+
 ## 性能特性
 
 Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重复搜索时通常比 VS Code 内置实时扫盘搜索更快。
@@ -67,6 +76,7 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 | **导航** | 光标下单词 / 选中文本搜索 | ✅ `Alt+=` |
 | | Ctrl+Alt+] / Ctrl+Alt+[ 跳转下/上命中 | ✅ |
 | | Shift+Alt+F 快速打开文件 | ✅ |
+| | Alt+O 头/源文件切换（基于索引） | ✅ |
 | | 单击打开 / 预览 | ✅ Preview |
 | | 唯一命中自动打开 | ✅ 可配置 `autoOpenSingleHit` |
 
@@ -79,6 +89,7 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 | Search Selection | `Alt+=` |
 | Focus Search | `Shift+Alt+=` |
 | Quick Open File | `Shift+Alt+F` |
+| Switch Header/Source | `Alt+O` |
 | Next Hit | `Ctrl+Alt+]` |
 | Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | 命令面板 |

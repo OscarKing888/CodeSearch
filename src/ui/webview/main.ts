@@ -330,6 +330,7 @@ function closeTab(id: string): void {
 }
 
 function newTab(query = ''): Tab {
+  hideResultContextMenu();
   const tab = createTab(query);
   activeTabId = tab.id;
   searchInput.value = query;

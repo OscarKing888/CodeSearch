@@ -2,7 +2,7 @@
   "name": "ace-code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -23,6 +23,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:codeSearch.searchSelection",
+    "onCommand:codeSearch.switchHeaderSource",
     "onCommand:sourceSearch.searchSelection"
   ],
   "main": "./dist/extension.js",
@@ -97,6 +98,10 @@
       {
         "command": "codeSearch.searchInNewTab",
         "title": "Ace Code Search: Search in New Tab"
+      },
+      {
+        "command": "codeSearch.switchHeaderSource",
+        "title": "Ace Code Search: Switch Header/Source"
       }
     ],
     "keybindings": [
@@ -138,6 +143,21 @@
         "command": "codeSearch.prevHit",
         "key": "ctrl+alt+[",
         "when": "codeSearch.panel.focus"
+      },
+      {
+        "key": "alt+o",
+        "command": "-C_Cpp.SwitchHeaderSource",
+        "when": "editorTextFocus"
+      },
+      {
+        "key": "alt+o",
+        "command": "-clangd.switchheadersource",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codeSearch.switchHeaderSource",
+        "key": "alt+o",
+        "when": "editorTextFocus && !inQuickOpen && !suggestWidgetVisible && (resourceExtname =~ /\\.(c|cc|cpp|cxx|h|hpp|hxx)$/i || editorLangId =~ /^(c|cpp|cuda-cpp|objective-c|objective-cpp)$/)"
       }
     ],
     "configuration": {
@@ -352,7 +372,7 @@
     "validate:native": "node scripts/validate-native-artifacts.js",
     "version:bump": "node scripts/bump-version.js",
     "package": "vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
-    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/purgeStaleEntries.test.ts",
+    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js"
   },

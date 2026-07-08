@@ -2,10 +2,20 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
-## [0.2.4] - 2026-07-08
+## [0.2.5] - 2026-07-08
 
 ### Changed
-- Add copy search results
+- Add Alt+O switch .h/.cpp
+- Auto-migrate user Alt+O keybindings away from C/C++ Tools / clangd commands on extension activate
+
+## [0.2.4] - 2026-07-08
+
+### Added
+- Switch between indexed header/source pairs with `Alt+O` (`codeSearch.switchHeaderSource`); unbinds competing C/C++ and clangd defaults on the same key
+- Override `C_Cpp.SwitchHeaderSource` / `clangd.switchheadersource` so Cursor user keybindings still route to index-based pairing
+
+### Changed
+- Add copy search results to clipboard
 
 ## [0.2.3] - 2026-07-07
 

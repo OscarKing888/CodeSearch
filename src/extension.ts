@@ -16,6 +16,9 @@ import { SearchPanelProvider } from './ui/SearchPanelProvider';
 import { createStandaloneIndex, manageIndexes, openSecondaryIndex } from './ui/IndexManagement';
 import { IndexManagePanel } from './ui/IndexManagePanel';
 import { getLogicalCpuCount } from './index/threadCount';
+import { switchHeaderSource as runSwitchHeaderSource } from './pairing/switchHeaderSource';
+import { registerHeaderSourceCommandOverrides } from './pairing/registerHeaderSourceCommandOverrides';
+import { migrateUserHeaderSourceKeybindings } from './pairing/migrateHeaderSourceKeybindings';
 
 const CREATE_INDEX_LABEL = 'Create Index';
 const SKIP_INDEX_LABEL = 'Not Now';
@@ -42,11 +45,27 @@ let progressListener: (() => void) | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let indexingSettingsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
+function resolveEditorProduct(): 'Cursor' | 'Code' {
+  const appName = vscode.env.appName.toLowerCase();
+  if (appName.includes('cursor') || vscode.env.uriScheme === 'cursor') {
+    return 'Cursor';
+  }
+  return 'Code';
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   configureBetterSqlite3(context.extensionPath);
   extensionContext = context;
   logCpuInfo(context);
   registerCommands(context);
+  void migrateUserHeaderSourceKeybindings(resolveEditorProduct(), (message) =>
+    outputChannel?.appendLine(message)
+  );
+  registerHeaderSourceCommandOverrides(
+    context,
+    () => indexManager,
+    ensureWorkspaceReady
+  );
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -138,6 +157,9 @@ function registerCommands(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('codeSearch.searchInNewTab', () => {
       panelProvider?.searchInNewTab();
+    }),
+    vscode.commands.registerCommand('codeSearch.switchHeaderSource', () => {
+      void switchHeaderSource();
     })
   );
 }
@@ -383,6 +405,18 @@ async function saveSecondaryIds(context: vscode.ExtensionContext): Promise<void>
     return;
   }
   await context.workspaceState.update('secondaryIndexIds', indexManager.getWorkspaceSecondaryIds());
+}
+
+async function switchHeaderSource(): Promise<void> {
+  try {
+    if (!(await ensureWorkspaceReady())) {
+      return;
+    }
+    await runSwitchHeaderSource(indexManager);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    void vscode.window.showErrorMessage(`Ace Code Search: ${message}`);
+  }
 }
 
 function searchSelection(): void {

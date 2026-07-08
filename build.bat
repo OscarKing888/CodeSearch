@@ -89,6 +89,5 @@ echo.
 echo  Debug: open this folder in VS Code and press F5
 echo  Install: run 安装CodeSearch.bat
 echo ========================================
-exit /b 0
-
-::call "%~dp0安装CodeSearch.bat"
+call "%~dp0安装CodeSearch.bat"
+exit /b %ERRORLEVEL%
