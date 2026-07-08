@@ -75,6 +75,8 @@
 - Lock state is shown only via the JS `.tab-lock` element (`🔒` / `🔓`). Do not add a CSS `::after` lock on `.tab.locked`; that duplicates the icon.
 - Tab layout uses `.tab-label` (`flex: 1; min-width: 0`) for ellipsis, and `.tab-lock` / `.tab-close` use `flex-shrink: 0` so long labels do not clip the lock or close controls.
 - Locked tabs intentionally hide the close button; unlock first to close.
+- Result row copy format: `{absolutePath}:{line}\t{lineText}` via right-click **Copy** / **Copy All**. Clipboard writes go through `copyToClipboard` postMessage and `vscode.env.clipboard.writeText` in `SearchPanelProvider.ts` (not `navigator.clipboard` in the webview).
+- **Copy All** uses the active tab's loaded hits in current table sort order, newline-separated.
 
 ## Release documentation
 

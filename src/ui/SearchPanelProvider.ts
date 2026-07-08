@@ -115,6 +115,11 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
         case 'setContextLines':
           await this.setUiContextLines(Number(msg.contextLines));
           break;
+        case 'copyToClipboard':
+          if (typeof msg.text === 'string') {
+            await vscode.env.clipboard.writeText(msg.text);
+          }
+          break;
       }
     });
 
@@ -688,6 +693,35 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       color: var(--vscode-descriptionForeground);
       margin-left: 4px;
     }
+    .result-context-menu {
+      position: fixed;
+      z-index: 100;
+      display: none;
+      min-width: 120px;
+      background: var(--vscode-dropdown-background);
+      border: 1px solid var(--vscode-dropdown-border);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      border-radius: 3px;
+      padding: 2px 0;
+    }
+    .result-context-menu.visible {
+      display: block;
+    }
+    .result-context-menu-item {
+      display: block;
+      width: 100%;
+      padding: 4px 12px;
+      border: none;
+      background: transparent;
+      color: var(--vscode-foreground);
+      font-family: inherit;
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .result-context-menu-item:hover {
+      background: var(--vscode-list-hoverBackground);
+    }
   </style>
 </head>
 <body>
@@ -718,6 +752,10 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     <span id="statusIndex">Index: idle</span>
   </div>
   <div class="results" id="results"></div>
+  <div class="result-context-menu" id="resultContextMenu">
+    <button type="button" class="result-context-menu-item" data-action="copy">Copy</button>
+    <button type="button" class="result-context-menu-item" data-action="copyAll">Copy All</button>
+  </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

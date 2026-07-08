@@ -88,6 +88,9 @@ const btnSettings = document.getElementById('btnSettings') as HTMLButtonElement;
 const statusHits = document.getElementById('statusHits') as HTMLSpanElement;
 const statusIndex = document.getElementById('statusIndex') as HTMLSpanElement;
 const resultsEl = document.getElementById('results') as HTMLDivElement;
+const resultContextMenu = document.getElementById('resultContextMenu') as HTMLDivElement;
+
+let contextMenuHitIndex = -1;
 
 let caseSensitive = false;
 let phraseSearch = true;
@@ -599,6 +602,37 @@ function openHitFile(hit: HitPayload, preview: boolean): void {
   });
 }
 
+function formatHitLine(hit: HitPayload): string {
+  const fullPath = hit.localPath ?? hit.path;
+  return `${fullPath}:${hit.line}\t${hit.lineText}`;
+}
+
+function copyTextToClipboard(text: string): void {
+  vscode.postMessage({ type: 'copyToClipboard', text });
+}
+
+function hideResultContextMenu(): void {
+  resultContextMenu.classList.remove('visible');
+  contextMenuHitIndex = -1;
+}
+
+function showResultContextMenu(x: number, y: number, hitIndex: number): void {
+  contextMenuHitIndex = hitIndex;
+  resultContextMenu.style.left = `${x}px`;
+  resultContextMenu.style.top = `${y}px`;
+  resultContextMenu.classList.add('visible');
+}
+
+function copyAllHits(): void {
+  const tab = getActiveTab();
+  if (!tab?.results?.hits.length) {
+    return;
+  }
+  const sorted = getSortedIndices(tab.results.hits, tab.sortColumn, tab.sortDirection);
+  const text = sorted.map((i) => formatHitLine(tab.results!.hits[i])).join('\n');
+  copyTextToClipboard(text);
+}
+
 function getFileName(filePath: string): string {
   const parts = filePath.split(/[/\\]/);
   return parts[parts.length - 1] || filePath;
@@ -951,6 +985,50 @@ function postPanelFocus(focused: boolean): void {
 window.addEventListener('focus', () => postPanelFocus(true));
 window.addEventListener('blur', () => postPanelFocus(false));
 document.addEventListener('pointerdown', () => postPanelFocus(true));
+
+resultsEl.addEventListener('contextmenu', (e) => {
+  const row = (e.target as HTMLElement).closest('.hit-row');
+  if (!row) {
+    return;
+  }
+  const tab = getActiveTab();
+  if (!tab?.results?.hits.length) {
+    return;
+  }
+  e.preventDefault();
+  const hitIndex = Number((row as HTMLElement).dataset.hitIndex);
+  if (Number.isNaN(hitIndex)) {
+    return;
+  }
+  showResultContextMenu(e.clientX, e.clientY, hitIndex);
+});
+
+resultContextMenu.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const item = (e.target as HTMLElement).closest('[data-action]');
+  if (!item) {
+    return;
+  }
+  const action = item.getAttribute('data-action');
+  const tab = getActiveTab();
+  if (action === 'copy' && tab?.results && contextMenuHitIndex >= 0) {
+    const hit = tab.results.hits[contextMenuHitIndex];
+    if (hit) {
+      copyTextToClipboard(formatHitLine(hit));
+    }
+  } else if (action === 'copyAll') {
+    copyAllHits();
+  }
+  hideResultContextMenu();
+});
+
+document.addEventListener('click', () => hideResultContextMenu());
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    hideResultContextMenu();
+  }
+});
+resultsEl.addEventListener('scroll', () => hideResultContextMenu(), true);
 
 ensureDefaultTab();
 renderTabs();
