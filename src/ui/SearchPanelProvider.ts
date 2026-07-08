@@ -373,7 +373,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
   private handleAutocomplete(prefix: string): void {
     const suggestions = this.indexManager.getTokenSuggestions(prefix, 20);
-    this.postMessage({ type: 'autocomplete', suggestions });
+    this.postMessage({ type: 'autocomplete', prefix, suggestions });
   }
 
   private postMessage(msg: unknown): void {
@@ -473,9 +473,12 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       display: flex;
       justify-content: space-between;
     }
-    .autocomplete-item:hover,
-    .autocomplete-item.active {
+    .autocomplete-item:hover {
       background: var(--vscode-list-hoverBackground);
+    }
+    .autocomplete-item.active {
+      background: var(--vscode-list-activeSelectionBackground);
+      color: var(--vscode-list-activeSelectionForeground);
     }
     .autocomplete-freq {
       color: var(--vscode-descriptionForeground);

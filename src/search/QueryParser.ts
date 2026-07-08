@@ -2,8 +2,75 @@ import { ParsedQuery, QueryFilters, QueryHighlightSegment } from '../types';
 import { hasMultiTokenWildcard } from './WildcardMatcher';
 
 const PATH_FILTER_PATTERN = /(-?)(ext|dir|file|age):(\S+)/g;
-const CONTENT_INCLUDE_PATTERN = /\+(?:"([^"]+)"|([^\s]+))/g;
-const CONTENT_EXCLUDE_PATTERN = /-(?:"([^"]+)"|([^\s-][^\s]*))/g;
+const CONTENT_FILTER_PATTERN = /([+-])(?:"(?:[^"\\]|\\.)*"|[^\s]+)/g;
+const HIGHLIGHT_REGEX =
+  /loose\d*:|(-?)(ext|dir|file|age):(\S+)|\+(?:"(?:[^"\\]|\\.)*"|[^\s]+)|-(?:"(?:[^"\\]|\\.)*"|[^\s]+)|"(?:[^"\\]|\\.)*"|[^\s]+/gi;
+
+export function unescapeQueryString(s: string): string {
+  let result = '';
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      const next = s[i + 1];
+      if (next === '\\' || next === '"') {
+        result += next;
+        i += 2;
+        continue;
+      }
+    }
+    result += s[i];
+    i++;
+  }
+  return result;
+}
+
+function parseLeadingQuotedString(s: string): { value: string; rest: string } | null {
+  if (!s.startsWith('"')) {
+    return null;
+  }
+
+  let i = 1;
+  let inner = '';
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '\\' && i + 1 < s.length) {
+      inner += ch + s[i + 1];
+      i += 2;
+      continue;
+    }
+    if (ch === '"') {
+      return { value: inner, rest: s.slice(i + 1) };
+    }
+    inner += ch;
+    i++;
+  }
+
+  return null;
+}
+
+function parseContentFilterValue(token: string): string | undefined {
+  if (token.startsWith('"')) {
+    const parsed = parseLeadingQuotedString(token);
+    return parsed ? unescapeQueryString(parsed.value) : undefined;
+  }
+  return unescapeQueryString(token);
+}
+
+function applyContentFilters(remaining: string, filters: QueryFilters): string {
+  return remaining.replace(CONTENT_FILTER_PATTERN, (full, sign: string) => {
+    const token = full.slice(1);
+    const value = parseContentFilterValue(token);
+    if (value === undefined) {
+      return full;
+    }
+    if (sign === '+') {
+      filters.contentInclude.push(value);
+    } else if (!/^(ext|dir|file|age):/.test(value)) {
+      filters.contentExclude.push(value);
+    }
+    return ' ';
+  });
+}
 
 export function parseAgeValue(value: string): number | undefined {
   const match = value.match(/^(\d+)d(?:(\d+)h)?$|^(\d+)h$|^(\d+)m$/);
@@ -119,17 +186,7 @@ export function parseQuery(raw: string, defaultPhrase: boolean, defaultLooseGap 
     return ' ';
   });
 
-  remaining = remaining.replace(CONTENT_INCLUDE_PATTERN, (_full, quoted, word) => {
-    filters.contentInclude.push(quoted ?? word);
-    return ' ';
-  });
-
-  remaining = remaining.replace(CONTENT_EXCLUDE_PATTERN, (_full, quoted, word) => {
-    if (quoted !== undefined || (word && !/^(ext|dir|file|age):/.test(word))) {
-      filters.contentExclude.push(quoted ?? word);
-    }
-    return ' ';
-  });
+  remaining = applyContentFilters(remaining, filters);
 
   remaining = remaining.trim();
 
@@ -155,9 +212,9 @@ export function parseQuery(raw: string, defaultPhrase: boolean, defaultLooseGap 
     };
   }
 
-  const quotedMatch = remaining.match(/^"([^"]*)"(.*)$/);
-  if (quotedMatch) {
-    const inner = quotedMatch[1];
+  const quoted = parseLeadingQuotedString(remaining);
+  if (quoted) {
+    const inner = unescapeQueryString(quoted.value);
     terms = [inner];
     phrase = true;
     if (hasMultiTokenWildcard(inner) || /\s\*(?::\d+)?\s/.test(inner)) {
@@ -168,18 +225,19 @@ export function parseQuery(raw: string, defaultPhrase: boolean, defaultLooseGap 
         wildcardSpanLines = true;
       }
     }
-    remaining = quotedMatch[2].trim();
+    remaining = quoted.rest.trim();
   } else if (phrase && remaining.includes(' ')) {
-    terms = [remaining];
-    if (hasMultiTokenWildcard(remaining)) {
+    const inner = unescapeQueryString(remaining);
+    terms = [inner];
+    if (hasMultiTokenWildcard(inner)) {
       multiWildcard = true;
     }
   } else {
-    terms = remaining.split(/\s+/).filter(Boolean);
+    terms = remaining.split(/\s+/).filter(Boolean).map(unescapeQueryString);
     if (terms.length > 1) {
       phrase = defaultPhrase;
       if (phrase) {
-        terms = [remaining];
+        terms = [unescapeQueryString(remaining)];
       }
     }
     if (terms.length === 1 && terms[0].includes('*')) {
@@ -318,8 +376,7 @@ export function highlightQuery(raw: string): QueryHighlightSegment[] {
     return segments;
   }
 
-  const regex =
-    /loose\d*:|(-?)(ext|dir|file|age):(\S+)|\+(?:"([^"]+)"|(\S+))|-(?:"([^"]+)"|(\S+))|"(?:[^"\\]|\\.)*"|[^\s]+/gi;
+  const regex = HIGHLIGHT_REGEX;
 
   let lastEnd = 0;
   let match: RegExpExecArray | null;

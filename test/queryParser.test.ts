@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { parseQuery, buildFtsMatch, parseAgeValue, highlightQuery, contentMatchesFilter } from '../src/search/QueryParser';
+import { parseQuery, buildFtsMatch, parseAgeValue, highlightQuery, contentMatchesFilter, unescapeQueryString } from '../src/search/QueryParser';
 import { findLooseHits } from '../src/search/LooseSearch';
 import { fuzzyMatch } from '../src/search/FuzzyMatch';
 import { findWildcardHits } from '../src/search/WildcardMatcher';
@@ -44,6 +44,24 @@ const q6 = parseQuery('find +"only this" -"not this"', true);
 assert.deepStrictEqual(q6.filters.contentInclude, ['only this']);
 assert.deepStrictEqual(q6.filters.contentExclude, ['not this']);
 
+// Escape sequences
+assert.strictEqual(unescapeQueryString('\\"AbleCore\\"'), '"AbleCore"');
+assert.strictEqual(unescapeQueryString('\\\\'), '\\');
+
+const qEsc1 = parseQuery('\\"AbleCore\\"', true);
+assert.deepStrictEqual(qEsc1.terms, ['"AbleCore"']);
+assert.strictEqual(qEsc1.phrase, true);
+
+const qEsc2 = parseQuery('"\\"AbleCore\\""', true);
+assert.deepStrictEqual(qEsc2.terms, ['"AbleCore"']);
+assert.strictEqual(qEsc2.phrase, true);
+
+const qEsc3 = parseQuery('find +\\"only\\"', true);
+assert.deepStrictEqual(qEsc3.terms, ['find']);
+assert.deepStrictEqual(qEsc3.filters.contentInclude, ['"only"']);
+
+assert.strictEqual(buildFtsMatch(['"AbleCore"'], true), '"""AbleCore"""');
+
 // Multi wildcard
 const q7 = parseQuery('"this * that"', true);
 assert.strictEqual(q7.multiWildcard, true);
@@ -52,6 +70,9 @@ assert.strictEqual(q7.multiWildcard, true);
 const segs = highlightQuery('myVar ext:cpp -file:log');
 assert.ok(segs.some((s) => s.kind === 'filter-include'));
 assert.ok(segs.some((s) => s.kind === 'filter-exclude'));
+
+const escSegs = highlightQuery('find +\\"only\\"');
+assert.ok(escSegs.some((s) => s.kind === 'quoted' || s.kind === 'filter-include'));
 
 // Loose search
 const looseHits = findLooseHits('Query q = parse(input);', ['parse', 'query'], 10, false, false);

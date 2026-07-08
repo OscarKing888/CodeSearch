@@ -391,11 +391,16 @@ searchInput.addEventListener('keydown', (e) => {
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      acActiveIndex = Math.max(acActiveIndex - 1, 0);
+      acActiveIndex = Math.max(acActiveIndex - 1, -1);
       renderAutocomplete();
       return;
     }
-    if (e.key === 'Tab' || (e.key === 'Enter' && acActiveIndex >= 0)) {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      applySuggestion(suggestions[acActiveIndex >= 0 ? acActiveIndex : 0]);
+      return;
+    }
+    if (e.key === 'Enter' && acActiveIndex >= 0) {
       e.preventDefault();
       applySuggestion(suggestions[acActiveIndex]);
       return;
@@ -407,8 +412,11 @@ searchInput.addEventListener('keydown', (e) => {
   }
 
   if (e.key === 'Enter') {
+    e.preventDefault();
+    hideAutocomplete();
     clearTimeout(debounceTimer);
     doSearch(false);
+    return;
   }
 });
 
@@ -498,10 +506,13 @@ function doSearch(forceNewTab: boolean): void {
   });
 }
 
+function getCurrentWordPrefix(): string {
+  const wordMatch = searchInput.value.match(/[a-zA-Z_][a-zA-Z0-9_]*$/);
+  return wordMatch?.[0] ?? '';
+}
+
 function requestAutocomplete(): void {
-  const value = searchInput.value;
-  const wordMatch = value.match(/[a-zA-Z_][a-zA-Z0-9_]*$/);
-  const prefix = wordMatch?.[0] ?? '';
+  const prefix = getCurrentWordPrefix();
   if (prefix.length < 2) {
     hideAutocomplete();
     return;
@@ -548,6 +559,7 @@ function hideAutocomplete(): void {
   autocompleteEl.innerHTML = '';
   acActiveIndex = -1;
   suggestions = [];
+  clearTimeout(acTimer);
 }
 
 function updateQueryHighlight(): void {
@@ -559,7 +571,7 @@ function highlightQueryHtml(raw: string): string {
     return '';
   }
   const regex =
-    /loose\d*:|(-?)(ext|dir|file|age):(\S+)|\+(?:"([^"]+)"|(\S+))|-(?:"([^"]+)"|(\S+))|"(?:[^"\\]|\\.)*"|[^\s]+/gi;
+    /loose\d*:|(-?)(ext|dir|file|age):(\S+)|\+(?:"(?:[^"\\]|\\.)*"|[^\s]+)|-(?:"(?:[^"\\]|\\.)*"|[^\s]+)|"(?:[^"\\]|\\.)*"|[^\s]+/gi;
   let html = '';
   let lastEnd = 0;
   let match: RegExpExecArray | null;
@@ -952,11 +964,16 @@ window.addEventListener('message', (event) => {
       statusIndex.textContent = text;
       break;
     }
-    case 'autocomplete':
+    case 'autocomplete': {
+      const prefix = typeof msg.prefix === 'string' ? msg.prefix : '';
+      if (!prefix || prefix !== getCurrentWordPrefix()) {
+        break;
+      }
       suggestions = msg.suggestions ?? [];
-      acActiveIndex = suggestions.length > 0 ? 0 : -1;
+      acActiveIndex = -1;
       renderAutocomplete();
       break;
+    }
     case 'focus':
       searchInput.focus();
       searchInput.select();

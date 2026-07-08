@@ -171,6 +171,8 @@ export class IndexService extends EventEmitter {
         this.total > 0
           ? `Indexing ${this.indexed}/${this.total} files${threadHint}...`
           : 'Indexing...';
+    } else if (this.status === 'upToDate') {
+      message = `${formatTokenCount(this.getTokenCount())} · Up to date`;
     }
     return {
       status: this.status,
@@ -418,6 +420,14 @@ export class IndexService extends EventEmitter {
     return rankCounterparts(filePath, rows);
   }
 
+  getTokenCount(): number {
+    if (!this.db) {
+      return 0;
+    }
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM tokens').get() as { count: number };
+    return row.count;
+  }
+
   getTokenSuggestions(prefix: string, limit = 20): Array<{ token: string; freq: number }> {
     if (!this.db || !prefix || prefix.length < 2) {
       return [];
@@ -425,7 +435,7 @@ export class IndexService extends EventEmitter {
     const pattern = `${prefix}%`;
     return this.db
       .prepare(
-        `SELECT token, freq FROM tokens WHERE token LIKE ? COLLATE NOCASE ORDER BY freq DESC LIMIT ?`
+        `SELECT token, freq FROM tokens WHERE token LIKE ? COLLATE NOCASE ORDER BY LENGTH(token) ASC, freq DESC LIMIT ?`
       )
       .all(pattern, limit) as Array<{ token: string; freq: number }>;
   }
@@ -437,4 +447,8 @@ export class IndexService extends EventEmitter {
       this.db = undefined;
     }
   }
+}
+
+function formatTokenCount(count: number): string {
+  return `${count.toLocaleString('en-US')} tokens`;
 }

@@ -78,6 +78,10 @@
 - Result row copy format: `{absolutePath}:{line}\t{lineText}` via right-click **Copy** / **Copy All**. Clipboard writes go through `copyToClipboard` postMessage and `vscode.env.clipboard.writeText` in `SearchPanelProvider.ts` (not `navigator.clipboard` in the webview).
 - **Copy All** uses the active tab's loaded hits in current table sort order, newline-separated.
 - Hide the result context menu (`hideResultContextMenu`) when switching tabs or creating a new tab so `contextMenuHitIndex` cannot go stale across tab changes.
+- Search query escape sequences: `\\` → `\`, `\"` → `"` in main terms and `+/-` content filters (`src/search/QueryParser.ts` `unescapeQueryString`). Example: `\"AbleCore\"` searches for literal `"AbleCore"`.
+- Autocomplete suggestions are ordered by token length ascending, then frequency descending (`IndexService.getTokenSuggestions`, `IndexManager.getTokenSuggestions`).
+- Autocomplete keyboard: Opening the list leaves `acActiveIndex = -1` (no default highlight). Enter searches typed text unless a suggestion was arrow-highlighted (`acActiveIndex >= 0`), then Enter accepts that highlight. Tab always accepts the first suggestion, or the arrow-highlighted one if navigated.
+- Index status when up to date shows token vocabulary size before the message, e.g. `Index: 12,345 tokens · Up to date` (`IndexService.getTokenCount`, `IndexManager.getCombinedProgress`).
 
 ## Header/Source pairing
 

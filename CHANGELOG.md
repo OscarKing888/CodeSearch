@@ -2,6 +2,21 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
+## [0.3.3] - 2026-07-08
+
+### Changed
+- fix candidate list bug
+
+## [0.3.2] - 2026-07-08
+
+### Changed
+- fix candidate list bug
+
+## [0.3.1] - 2026-07-08
+
+### Changed
+- Optimize search candidate list
+
 ## [0.3.0] - 2026-07-08
 
 ### Changed

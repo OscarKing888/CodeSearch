@@ -399,7 +399,12 @@ export class IndexManager extends EventEmitter {
       return { message: `Scanning ${scanned} files${scanSuffix}...`, partial };
     }
     const count = services.length;
-    return { message: count > 1 ? `Up to date (${count} indexes)` : 'Up to date', partial };
+    const tokenCount = services.reduce((sum, s) => sum + s.getTokenCount(), 0);
+    const tokenLabel = `${tokenCount.toLocaleString('en-US')} tokens · `;
+    return {
+      message: count > 1 ? `${tokenLabel}Up to date (${count} indexes)` : `${tokenLabel}Up to date`,
+      partial,
+    };
   }
 
   getTokenSuggestions(prefix: string, limit = 20): Array<{ token: string; freq: number }> {
@@ -411,7 +416,7 @@ export class IndexManager extends EventEmitter {
     }
     return Array.from(seen.entries())
       .map(([token, freq]) => ({ token, freq }))
-      .sort((a, b) => b.freq - a.freq)
+      .sort((a, b) => a.token.length - b.token.length || b.freq - a.freq)
       .slice(0, limit);
   }
 
