@@ -1,8 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { minimatch } from 'minimatch';
 import { IndexingSettings } from '../indexingSettings';
-import { isExcludedDir, isExcludedFile, isPathIgnored } from './excludePatterns';
+import { getIndexingMatcher, IndexingMatcher, normalizeMatchPath } from './excludePatterns';
 import { FileRecord } from '../types';
 
 const TEXT_EXTENSIONS = new Set([
@@ -65,19 +64,10 @@ export function isBinaryBuffer(buf: Buffer): boolean {
   return replacementCount > Math.max(4, sample.length * 0.05);
 }
 
-function normalizePath(p: string): string {
-  return p.replace(/\\/g, '/');
-}
-
-function matchesAny(patterns: string[], filePath: string): boolean {
-  const normalized = normalizePath(filePath);
-  return patterns.some((pattern) => minimatch(normalized, pattern, { dot: true, nocase: process.platform === 'win32' }));
-}
-
 export function isUnderRoot(filePath: string, rootDirs: string[]): boolean {
-  const normalized = normalizePath(path.resolve(filePath));
+  const normalized = normalizeMatchPath(path.resolve(filePath));
   return rootDirs.some((root) => {
-    const rootNorm = normalizePath(path.resolve(root));
+    const rootNorm = normalizeMatchPath(path.resolve(root));
     const rootLower = rootNorm.toLowerCase();
     const pathLower = normalized.toLowerCase();
     return pathLower === rootLower || pathLower.startsWith(`${rootLower}/`);
@@ -87,12 +77,13 @@ export function isUnderRoot(filePath: string, rootDirs: string[]): boolean {
 export async function shouldPathRemainInIndex(
   filePath: string,
   rootDirs: string[],
-  config: IndexingSettings
+  config: IndexingSettings,
+  matcher: IndexingMatcher = getIndexingMatcher(config)
 ): Promise<boolean> {
   if (!isUnderRoot(filePath, rootDirs)) {
     return false;
   }
-  if (isPathIgnored(filePath, config)) {
+  if (matcher.isPathIgnored(filePath)) {
     return false;
   }
   try {
@@ -100,7 +91,7 @@ export async function shouldPathRemainInIndex(
     if (!stat.isFile()) {
       return false;
     }
-    return shouldIndexFile(filePath, config, stat.size);
+    return shouldIndexFile(filePath, config, stat.size, matcher);
   } catch {
     return false;
   }
@@ -109,9 +100,9 @@ export async function shouldPathRemainInIndex(
 export function shouldIndexFile(
   filePath: string,
   config: IndexingSettings,
-  sizeBytes: number
+  sizeBytes: number,
+  matcher: IndexingMatcher = getIndexingMatcher(config)
 ): boolean {
-  const normalized = normalizePath(filePath);
   const ext = path.extname(filePath).toLowerCase();
   const basename = path.basename(filePath);
 
@@ -123,11 +114,11 @@ export function shouldIndexFile(
     return false;
   }
 
-  if (!matchesAny(config.includeGlobs, normalized)) {
+  if (!matcher.matchesIncludeGlob(filePath)) {
     return false;
   }
 
-  if (isExcludedFile(filePath, config)) {
+  if (matcher.isExcludedFile(filePath)) {
     return false;
   }
 
@@ -165,7 +156,7 @@ export async function readFileForIndex(filePath: string): Promise<FileRecord | n
     }
 
     const content = buf.toString('utf8');
-    const dir = normalizePath(path.dirname(filePath));
+    const dir = normalizeMatchPath(path.dirname(filePath));
     const ext = path.extname(filePath).replace(/^\./, '').toLowerCase();
 
     return {
@@ -186,6 +177,7 @@ export async function* walkDirectory(
   config: IndexingSettings
 ): AsyncGenerator<string> {
   const stack: string[] = [rootDir];
+  const matcher = getIndexingMatcher(config);
 
   while (stack.length > 0) {
     const dir = stack.pop()!;
@@ -198,17 +190,16 @@ export async function* walkDirectory(
 
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
-      const normalized = normalizePath(fullPath);
 
       if (entry.isDirectory()) {
-        if (isExcludedDir(entry.name, config) || matchesAny(config.excludeGlobs, normalized + '/')) {
+        if (matcher.isExcludedDir(entry.name) || matcher.matchesExcludeGlob(`${fullPath}/`)) {
           continue;
         }
         stack.push(fullPath);
       } else if (entry.isFile()) {
         try {
           const stat = await fs.promises.stat(fullPath);
-          if (shouldIndexFile(fullPath, config, stat.size)) {
+          if (shouldIndexFile(fullPath, config, stat.size, matcher)) {
             yield fullPath;
           }
         } catch {

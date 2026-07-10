@@ -5,6 +5,7 @@ import { IndexRegistry, mapFilePath } from './IndexRegistry';
 import { IndexService } from './IndexService';
 import { DirectoryMapping, IndexMeta } from './types';
 import { PerIndexExcludes } from './excludePatterns';
+import { compareTokenSuggestions } from './tokenSuggestions';
 
 function metaToPerIndexExcludes(meta: Pick<IndexMeta, 'excludeDirNames' | 'excludeFileNames' | 'excludeGlobs'>): PerIndexExcludes | undefined {
   if (
@@ -416,7 +417,7 @@ export class IndexManager extends EventEmitter {
     }
     return Array.from(seen.entries())
       .map(([token, freq]) => ({ token, freq }))
-      .sort((a, b) => a.token.length - b.token.length || b.freq - a.freq)
+      .sort(compareTokenSuggestions)
       .slice(0, limit);
   }
 

@@ -10,6 +10,34 @@ VS Code 扩展，基于 SQLite FTS5 提供全文代码索引与即时搜索。
 
 详细开发说明见 [README_Dev.md](README_Dev.md)。
 
+## 大型工作区性能优化
+
+针对 Unreal Engine 等大型代码库（实测 UE 5.61），0.4.x 重点解决「索引已 **Up to date** 但扩展宿主仍高 CPU、搜索体感卡顿」的问题。实机 profile 表明：同一索引下 `AActor` 类 FTS 查询约 **200ms** 即可达到 1 万条结果，瓶颈主要在扩展宿主内的文件监听与 UI 推送，而非 SQLite 或搜索算法本身。
+
+**文件监听**
+
+- VS Code/Cursor 使用编辑器原生 `FileSystemWatcher`，递归监听在文件服务进程执行，避免 chokidar 在扩展宿主遍历百万级路径
+- CLI 仍保留 chokidar fallback，不影响命令行索引
+- include/exclude matcher 只编译一次，扫描器与监听器共用
+- 搜索期间暂停文件索引更新，结束后分批排空积压事件
+- 监听器就绪后才显示 **Up to date**，避免 UI 显示空闲时仍在后台大规模初始化
+
+**流式搜索与结果面板**
+
+- FTS 游标化（`stmt.iterate`）边读边推送：首批 **50** 条、后续每批 **500** 条
+- Extension 按 **100** 行分块推送 webview，并等待 ACK，防止 `postMessage` 积压拖慢首屏
+- Webview 首批轻量纯文本渲染，后续批次经 `requestAnimationFrame` 合并 DOM 追加
+- 搜索进行中自动暂停后台索引，减少磁盘 IO 争抢
+- **Updating** 状态显示「已载入 / 已发现」数量，避免 `2,050 hits` 被误解为已全部渲染到界面
+
+**诊断日志（可选）**
+
+- `codeSearch.profileSearch` 默认 **关闭**；需要排查性能时可手动开启
+- 开启后搜索开始即写入独立 JSONL，运行中每 250ms checkpoint；支持 `success` / `cancelled` / `error` / `disposed` 终态
+- 命令 `codeSearch.openProfileLogFolder` 打开日志目录；`latest-profile.jsonl` 始终指向最新一轮搜索
+
+索引完成后的实机验证目标：`AActor` 首批 ≤500ms，1 万条结果 ≤5s，空闲后扩展宿主 CPU 快速回落。
+
 ## 头/源文件切换（Alt+O）
 
 在 **C/C++ 文件已建立索引** 后，按 **`Alt+O`** 可在配对的 `.h` / `.cpp`（及 `.hpp`、`.cc` 等）之间切换打开，无需再依赖 C/C++ Tools 或 clangd 的头源切换。
@@ -25,8 +53,9 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 
 - **SQLite FTS5 倒排索引**：工作区文件在后台建库，搜索走 `MATCH` 查询与 **BM25** 相关性排序，而非每次全量扫描磁盘
 - **边索引边搜索**：首次打开大项目时无需等 100% 建完索引即可开始查询；状态栏与工具栏显示 Scanning / Indexing / Up to date
-- **增量更新**：`chokidar` 监视文件变更，按 `mtime` 跳过未改文件；单文件增删改后局部重索引
-- **索引与搜索协同**：用户搜索时自动 `pause` 后台索引，减少 IO 争抢；批量事务（每 100 文件 commit）与可配置**多线程读盘**（`codeSearch.indexThreads`）加快首次建库
+- **增量更新**：VS Code/Cursor 使用原生文件监听器（CLI 保留 chokidar）；按 `mtime` 跳过未改文件，单文件增删改后局部重索引；include/exclude 规则只编译一次
+- **索引与搜索协同**：搜索期间暂停文件监听与索引更新，结束后分批排空；批量事务（每 100 文件 commit）与可配置**多线程读盘**（`codeSearch.indexThreads`）加快首次建库
+- **流式结果推送**：首批 50 条快速上屏，后续分批推送并配合 webview ACK 背压，大结果集下保持面板可响应
 - **本地持久化**：索引存于 `globalStorage` 的 SQLite 数据库（WAL 模式），重启 VS Code 后无需全量重建（除非强制刷新或文件已变）
 - **可配置排除**：默认跳过 `node_modules`、`dist`、二进制等，缩小索引体积、缩短建库时间
 
@@ -40,7 +69,7 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 |------|------|------|
 | **索引** | 可配置根目录全文索引 | ✅ 工作区根目录 + `code-search.autocreate` 指定根目录 |
 | | 多根目录 / 二级只读索引 / 目录映射 | ✅ 二级索引 + 路径映射 |
-| | 增量更新（文件监视器） | ✅ chokidar 实时更新 |
+| | 增量更新（文件监视器） | ✅ VS Code 原生监听（CLI 用 chokidar） |
 | | 低优先级后台节流（Be extra nice） | ⬜ 待实现 |
 | | 排除二进制 / 可配置排除 | ✅ 二进制检测 + `excludeGlobs` 配置 |
 | | 自动尊重 `.gitignore` | ⬜ 待实现（当前靠默认排除规则） |

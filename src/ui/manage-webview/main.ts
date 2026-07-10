@@ -10,6 +10,7 @@ interface DirectoryMapping {
 interface IndexListItem {
   id: string;
   name: string;
+  displayTitle: string;
   dbPath: string;
   rootDirs: string[];
   readOnly: boolean;
@@ -80,7 +81,7 @@ function matchesFilter(item: IndexListItem): boolean {
   if (!filterText) {
     return true;
   }
-  const hay = `${item.name} ${item.dbPath} ${item.rootDirs.join(' ')}`.toLowerCase();
+  const hay = `${item.displayTitle} ${item.name} ${item.dbPath} ${item.rootDirs.join(' ')}`.toLowerCase();
   return hay.includes(filterText);
 }
 
@@ -99,6 +100,8 @@ function renderCard(item: IndexListItem): string {
   const badges: string[] = [];
   if (item.isPrimary) {
     badges.push('<span class="badge primary">Primary</span>');
+  } else {
+    badges.push('<span class="badge secondary">Secondary</span>');
   }
   badges.push(`<span class="badge">${item.readOnly ? 'Read-only' : 'Writable'}</span>`);
   if (item.isAttached && !item.isPrimary) {
@@ -108,7 +111,6 @@ function renderCard(item: IndexListItem): string {
     badges.push('<span class="badge">Indexing</span>');
   }
 
-  const roots = item.rootDirs.length > 0 ? item.rootDirs.join('; ') : '—';
   const mappingsExpanded = expandedMappings.has(item.id);
   const excludesExpanded = expandedExcludes.has(item.id);
   const renameEditing = editingRename.has(item.id);
@@ -179,11 +181,11 @@ function renderCard(item: IndexListItem): string {
   return `
     <div class="card" data-id="${esc(item.id)}">
       <div class="card-header">
-        <span class="card-title">${esc(item.name)}</span>
+        <span class="card-title">${esc(item.displayTitle)}</span>
         ${badges.join('')}
       </div>
       <div class="meta">DB: ${esc(item.dbPath)}</div>
-      <div class="meta">Roots: ${esc(roots)}</div>
+      <div class="meta">Name: ${esc(item.name)}</div>
       <div class="meta">Status: ${esc(item.statusMessage)}</div>
       <div class="actions">${actions}</div>
       ${mappingsBlock}

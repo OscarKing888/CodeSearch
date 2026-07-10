@@ -6,9 +6,14 @@ import { IndexService } from '../index/IndexService';
 import { DirectoryMapping, IndexMeta } from '../index/types';
 import { formatPatternLines, parsePatternLines, PerIndexExcludes } from '../index/excludePatterns';
 
+import { formatIndexDisplayTitle } from './indexDisplayTitle';
+
+export { formatIndexDisplayTitle } from './indexDisplayTitle';
+
 export interface IndexListItem {
   id: string;
   name: string;
+  displayTitle: string;
   dbPath: string;
   rootDirs: string[];
   readOnly: boolean;
@@ -84,6 +89,7 @@ export function getIndexListPayload(manager: IndexManager): IndexListPayload {
     items.push({
       id: meta.id,
       name: meta.name,
+      displayTitle: formatIndexDisplayTitle(meta.rootDirs, meta.name),
       dbPath: meta.dbPath,
       rootDirs: meta.rootDirs,
       readOnly: meta.readOnly,
@@ -106,7 +112,7 @@ export function getIndexListPayload(manager: IndexManager): IndexListPayload {
     if (a.isAttached !== b.isAttached) {
       return a.isAttached ? -1 : 1;
     }
-    return a.name.localeCompare(b.name);
+    return a.displayTitle.localeCompare(b.displayTitle);
   });
 
   return { indexes: items };

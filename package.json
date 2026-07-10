@@ -2,7 +2,7 @@
   "name": "ace-code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.3.3",
+  "version": "0.5.0",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -86,6 +86,10 @@
       {
         "command": "codeSearch.openSettings",
         "title": "Ace Code Search: Open Settings"
+      },
+      {
+        "command": "codeSearch.openProfileLogFolder",
+        "title": "Ace Code Search: Open Profile Log Folder"
       },
       {
         "command": "codeSearch.openSecondaryIndex",
@@ -299,6 +303,11 @@
           "maximum": 500,
           "description": "Default token gap for loose phrase search"
         },
+        "codeSearch.profileSearch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write per-search performance profile logs to profile-logs (latest-profile.jsonl)."
+        },
         "codeSearch.indexThreads": {
           "type": "number",
           "default": 0,
@@ -372,7 +381,7 @@
     "validate:native": "node scripts/validate-native-artifacts.js",
     "version:bump": "node scripts/bump-version.js",
     "package": "vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
-    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts",
+    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js"
   },

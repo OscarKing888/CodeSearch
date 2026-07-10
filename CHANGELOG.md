@@ -2,6 +2,26 @@
 
 All notable changes to the Ace Code Search extension are documented in this file.
 
+## Unreleased
+
+### Fixed
+- Move editor file watching out of the extension-host chokidar crawl, coalesce queued changes during searches, and prevent large Unreal Engine workspaces from starving search/UI work.
+- Persist search profiles from search start through success, cancellation, errors, or disposal, including incremental checkpoints and ACK wait timings.
+- Stop re-registering command IDs owned by C/C++ and clangd extensions.
+
+### Changed
+- Show loaded versus discovered hit counts while streaming and keep search profiling disabled by default.
+
+## [0.5.0] - 2026-07-10
+
+### Changed
+- optimze input response
+
+## [0.4.0] - 2026-07-09
+
+### Changed
+- optimze for Unreal Engine  source code workspace
+
 ## [0.3.3] - 2026-07-08
 
 ### Changed

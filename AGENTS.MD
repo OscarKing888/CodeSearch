@@ -49,10 +49,18 @@
 - Useful commands:
   - `npm ci`
   - `npm test`
+  - `npx tsc --noEmit`
   - `node scripts/rebuild-electron.js all`
   - `npm run validate:native`
   - `npm run package`
 - On a single local platform, `npm run validate:native` only passes if the full cross-platform native matrix has already been merged into root `native/`.
+
+## Local VSIX install
+
+- `安装CodeSearch.bat` / `install-extension.sh` uninstall `OscarKing888.ace-code-search` (and lowercase `oscarking888.ace-code-search`) before installing the local `.vsix`. Marketplace installs block `--force` alone; uninstall first is required to replace them.
+- Both scripts also delete leftover `oscarking888.ace-code-search-*` folders under `%USERPROFILE%\.vscode\extensions` and `%USERPROFILE%\.cursor\extensions`. CLI uninstall alone does not remove old version directories; stale folders can leave the UI on an older version.
+- Install picks the VSIX matching `package.json` version (not merely the newest file by date), then verifies `code --list-extensions --show-versions` reports the expected version.
+- `build.bat` ends by calling `安装CodeSearch.bat` after packaging.
 
 ## Version bump checklist
 
@@ -80,8 +88,25 @@
 - Hide the result context menu (`hideResultContextMenu`) when switching tabs or creating a new tab so `contextMenuHitIndex` cannot go stale across tab changes.
 - Search query escape sequences: `\\` → `\`, `\"` → `"` in main terms and `+/-` content filters (`src/search/QueryParser.ts` `unescapeQueryString`). Example: `\"AbleCore\"` searches for literal `"AbleCore"`.
 - Autocomplete suggestions are ordered by token length ascending, then frequency descending (`IndexService.getTokenSuggestions`, `IndexManager.getTokenSuggestions`).
+- Autocomplete query path: SQL fetches up to 500 high-frequency candidates via `idx_tokens_token_freq` (`token COLLATE NOCASE, freq DESC`), then TypeScript sorts by length and truncates (`src/index/tokenSuggestions.ts`). Avoid `ORDER BY LENGTH(token)` in SQL on large `tokens` tables — it forces a temp B-tree over huge prefix match sets (e.g. UE5.61 ~2.5M tokens).
+- Existing databases migrate on `IndexService.initialize()`: if `idx_tokens_token_freq` is missing, create it once (~6 s on multi-million-token indexes). New databases get the index from `schema.sql`.
+- `SearchPanelProvider.handleAutocomplete()` uses a monotonic request sequence + `setImmediate` so stale autocomplete work is skipped when the user types ahead of in-flight queries.
 - Autocomplete keyboard: Opening the list leaves `acActiveIndex = -1` (no default highlight). Enter searches typed text unless a suggestion was arrow-highlighted (`acActiveIndex >= 0`), then Enter accepts that highlight. Tab always accepts the first suggestion, or the arrow-highlighted one if navigated.
+- Search runs on **submit** only: Enter, Ctrl+Enter (new tab), Tab/click autocomplete acceptance, or toggling search mode buttons. Typing in the search box updates highlight and autocomplete but does not query the index (avoids slow live search on large workspaces like UE5.61).
 - Index status when up to date shows token vocabulary size before the message, e.g. `Index: 12,345 tokens · Up to date` (`IndexService.getTokenCount`, `IndexManager.getCombinedProgress`).
+- Status bar layout: `#statusHits` (left, Ready or hit stats), `#statusIndex` + `#statusVersion` (right meta group). Version is always visible in `#statusVersion` after Index info; it is not embedded in Ready/hit text.
+- `WebviewView.onDidChangeVisibility` has no boolean event payload; read `webviewView.visible`. Browser-only entry points under `src/ui/webview` and `src/ui/manage-webview` stay excluded from the Node extension `tsconfig.json` and are compiled by esbuild.
+- **File watching**: VS Code/Cursor uses `workspace.createFileSystemWatcher(RelativePattern)` per index root/include glob so recursive watching stays in the editor file service; CLI/non-VS Code callers retain the chokidar fallback. `IndexingMatcher` in `src/index/excludePatterns.ts` caches exact-name sets and compiled `Minimatch` instances shared by scanning, event filtering, and fallback watching. `FileWatcher` coalesces each path for 300 ms, queues events while searches pause an index, and drains resumed work in event-loop-sized batches. Register the watcher before reporting `Up to date`; never reintroduce an extension-host chokidar crawl for editor sessions.
+- **Streaming search**: panel search uses `SearchService.searchStreaming()` / `MultiIndexSearchService.searchStreaming()` with `FIRST_BATCH_SIZE` 50 and `STREAM_BATCH_SIZE` 500 (`src/search/searchStreamBuffer.ts`). Streaming FTS paths use `iterateCandidateRows()` (`stmt.iterate`) so hits can yield before the full candidate set is loaded; sync `search()` still uses `fetchCandidateRows().all()`. Single-index workspaces pass batches through without re-batching. `SearchPanelProvider.runSearch()` decouples search production from UI via a queue (FTS can run ahead), starts `createRegistry()` in parallel with search, skips syntax highlight on the first non-empty batch, and highlights from batch 2 onward via sync `highlightHitsSync`. The first batch renders immediately with lightweight match wrapping, then receives a `resultsHighlightPatch` for syntax colors. After `searchStarted` and each `resultsPartial`, the provider yields and waits for `resultsPartialAck`; every stream message and ack carries `searchId` + `chunkId`, and `ResultsPartialAckController` ignores stale/late acknowledgements. Batches after the first are split into `UI_POST_CHUNK_SIZE` 100 hits. Webview pending rAF state is bound to one tab/search, is cancelled and acked on tab/search/visibility changes, and explicit missing tab IDs are dropped instead of falling back to the active tab. Background/hidden tabs update data and ack without DOM work. While streaming, status shows loaded rows versus discovered hits when those counts differ. Completion reorders existing DOM row groups to the selected column order instead of rebuilding all rows. Sync `search()` remains for CLI/tests. Protocol tests: `test/resultsPartialAckController.test.ts`, `test/searchStreamBuffer.test.ts`.
+- **Search profile logs** (`codeSearch.profileSearch`, default off): when enabled, search start immediately creates a unique JSONL log under `{globalStorage}/profile-logs/` and writes its meta line. Marks checkpoint through one serialized queue every 250 ms; first-result, ACK timeout, and terminal state flush immediately. Every session ends once with `success`, `cancelled`, `error`, or `disposed`; summary records `ttfrMs`, error text, and each chunk's ACK outcome/wait. `latest-profile.jsonl` and the workspace mirror use per-path ownership so an older search's late finalize cannot replace a newer session; `<workspace>/.code-search/profile-latest.jsonl` remains best-effort and never blocks the global log or search. Profile marks carry `searchId`; search-side marks use `AsyncLocalStorage`, so overlapping cancellation cannot clear or contaminate a newer session. Command `codeSearch.openProfileLogFolder` creates/reveals the folder even before the first completed search. Implementation: `src/utils/searchProfile.ts`; coverage: `test/searchProfileContext.test.ts`, `test/searchProfilePersistence.test.ts`.
+
+## Manage Indexes webview UI
+
+- Index cards are rendered in `src/ui/manage-webview/main.ts`; HTML shell and styles live in `src/ui/IndexManagePanel.ts`.
+- Card title uses full root folder path(s) via `formatIndexDisplayTitle` in `src/ui/indexDisplayTitle.ts` (`displayTitle` from `IndexManagementService.getIndexListPayload()`) — not `meta.name` (which defaults to `Primary`).
+- Multiple roots join with `; `; empty `rootDirs` falls back to `name` or `—`.
+- Every card shows a **Primary** or **Secondary** badge (`isPrimary`); attached secondaries also show **Attached**. Internal rename still edits `meta.name`; cards show `Name:` in meta for that label.
+- Delete confirmation uses `displayTitle`, not raw `meta.name`.
 
 ## Header/Source pairing
 
@@ -89,9 +114,8 @@
 - Logic lives in `src/pairing/headerSourcePairing.ts`; `IndexService.findHeaderSourceCounterparts()` runs the SQL query.
 - Priority: same `dir` + stem, then UE-style `Public` ↔ `Private` dir swap, then other dirs by path distance.
 - Command `codeSearch.switchHeaderSource` is bound to `Alt+O` for C/C++ extensions; package.json unbinds `C_Cpp.SwitchHeaderSource` and `clangd.switchheadersource` on the same key.
-- `registerHeaderSourceCommandOverrides()` re-registers handlers for `C_Cpp.SwitchHeaderSource` and `clangd.switchheadersource` after C/C++ extensions activate.
+- Do not register or re-register `C_Cpp.SwitchHeaderSource` or `clangd.switchheadersource`; VS Code rejects duplicate command IDs and repeated attempts can make the extension host unresponsive. Third-party commands remain owned by their extensions. `registerHeaderSourceCommandOverrides()` is retained only as a compatibility no-op.
 - `migrateUserHeaderSourceKeybindings()` runs on extension activate; if user `keybindings.json` still binds Alt+O to a legacy command, rewrite it to `codeSearch.switchHeaderSource` and insert unbind entries for the old commands.
-- Do not dispose prior command overrides on refresh; disposing restores the cpptools handler. Re-register the same command IDs instead.
 
 ## Release documentation
 

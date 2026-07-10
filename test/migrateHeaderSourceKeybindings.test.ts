@@ -4,6 +4,7 @@ import {
   parseKeybindingsJson,
   TARGET_HEADER_SOURCE_COMMAND,
 } from '../src/pairing/migrateHeaderSourceKeybindings';
+import { registerHeaderSourceCommandOverrides } from '../src/pairing/registerHeaderSourceCommandOverrides';
 
 function testMigrateLegacyAltO(): void {
   const input = [
@@ -48,10 +49,33 @@ function testParseJsoncComments(): void {
   assert.strictEqual(parsed[0].command, 'clangd.switchheadersource');
 }
 
+function testLegacyOverrideRegistrationIsNoOp(): void {
+  const subscriptions: Array<{ dispose(): void }> = [];
+  let getIndexManagerCalls = 0;
+  let ensureReadyCalls = 0;
+
+  registerHeaderSourceCommandOverrides(
+    { subscriptions } as never,
+    () => {
+      getIndexManagerCalls++;
+      return undefined;
+    },
+    async () => {
+      ensureReadyCalls++;
+      return true;
+    }
+  );
+
+  assert.strictEqual(subscriptions.length, 0);
+  assert.strictEqual(getIndexManagerCalls, 0);
+  assert.strictEqual(ensureReadyCalls, 0);
+}
+
 function main(): void {
   testMigrateLegacyAltO();
   testNoChangeWithoutLegacyAltO();
   testParseJsoncComments();
+  testLegacyOverrideRegistrationIsNoOp();
   console.log('migrateHeaderSourceKeybindings tests passed');
 }
 

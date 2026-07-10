@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS tokens (
   freq INTEGER DEFAULT 1
 );
 
+CREATE INDEX IF NOT EXISTS idx_tokens_token_freq
+  ON tokens(token COLLATE NOCASE, freq DESC);
+
 -- Index metadata
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,

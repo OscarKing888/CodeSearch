@@ -17,8 +17,8 @@ import { createStandaloneIndex, manageIndexes, openSecondaryIndex } from './ui/I
 import { IndexManagePanel } from './ui/IndexManagePanel';
 import { getLogicalCpuCount } from './index/threadCount';
 import { switchHeaderSource as runSwitchHeaderSource } from './pairing/switchHeaderSource';
-import { registerHeaderSourceCommandOverrides } from './pairing/registerHeaderSourceCommandOverrides';
 import { migrateUserHeaderSourceKeybindings } from './pairing/migrateHeaderSourceKeybindings';
+import { revealProfileLogFolder } from './utils/searchProfileUi';
 
 const CREATE_INDEX_LABEL = 'Create Index';
 const SKIP_INDEX_LABEL = 'Not Now';
@@ -60,11 +60,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerCommands(context);
   void migrateUserHeaderSourceKeybindings(resolveEditorProduct(), (message) =>
     outputChannel?.appendLine(message)
-  );
-  registerHeaderSourceCommandOverrides(
-    context,
-    () => indexManager,
-    ensureWorkspaceReady
   );
 
   context.subscriptions.push(
@@ -137,6 +132,9 @@ function registerCommands(context: vscode.ExtensionContext): void {
         `@ext:${context.extension.id}`
       );
     }),
+    vscode.commands.registerCommand('codeSearch.openProfileLogFolder', () => {
+      void revealProfileLogFolder(context);
+    }),
     vscode.commands.registerCommand('codeSearch.openSecondaryIndex', async () => {
       if (!(await ensureWorkspaceReady()) || !indexManager) {
         return;
@@ -167,6 +165,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
 async function initializeWorkspace(context: vscode.ExtensionContext): Promise<void> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
+    await panelProvider?.disposeActiveSearches();
     disposeWorkspaceResources();
     initializedWorkspaceHash = undefined;
     initPromise = undefined;
@@ -176,6 +175,7 @@ async function initializeWorkspace(context: vscode.ExtensionContext): Promise<vo
   const hash = workspaceHash(folders);
   if (initializedWorkspaceHash && initializedWorkspaceHash !== hash) {
     await saveSecondaryIds(context);
+    await panelProvider?.disposeActiveSearches();
     disposeWorkspaceResources();
     initPromise = undefined;
   }
@@ -484,7 +484,7 @@ async function runIndexingSettingsRefresh(): Promise<void> {
   panelProvider?.sendIndexStatus();
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   if (indexingSettingsRefreshTimer) {
     clearTimeout(indexingSettingsRefreshTimer);
     indexingSettingsRefreshTimer = undefined;
@@ -492,6 +492,8 @@ export function deactivate(): void {
   if (extensionContext) {
     void saveSecondaryIds(extensionContext);
   }
+  await panelProvider?.dispose();
+  panelProvider = undefined;
   disposeWorkspaceResources();
   statusBarItem?.dispose();
   statusBarItem = undefined;

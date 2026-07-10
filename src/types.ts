@@ -29,6 +29,11 @@ export interface SearchResult {
   partialIndex: boolean;
 }
 
+export interface SearchStreamBatch extends SearchResult {
+  hits: SearchHit[];
+  done: boolean;
+}
+
 export interface QueryFilters {
   extInclude: string[];
   extExclude: string[];

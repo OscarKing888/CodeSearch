@@ -1,13 +1,27 @@
 import * as vscode from 'vscode';
+import { performance } from 'perf_hooks';
 import { getConfig } from '../config';
 import { isBinaryExtension } from '../index/FileScanner';
 import { IndexManager } from '../index/IndexManager';
-import { MultiIndexSearchService, MultiSearchResult, getRelativePath } from '../search/MultiIndexSearchService';
-import { createRegistry, highlightHits } from '../utils/syntaxHighlight';
+import { MultiIndexSearchService, MultiSearchResult, MultiSearchStreamBatch, getRelativePath } from '../search/MultiIndexSearchService';
+import { FIRST_BATCH_SIZE, UI_POST_CHUNK_SIZE, yieldToEventLoop } from '../search/searchStreamBuffer';
+import { createRegistry, highlightHitsSync } from '../utils/syntaxHighlight';
+import {
+  beginSearchProfile,
+  runWithSearchProfile,
+  SearchProfileOutcome,
+  SearchProfileSession,
+} from '../utils/searchProfile';
+import { revealProfileLogFolder } from '../utils/searchProfileUi';
+import {
+  ResultsPartialAckController,
+  ResultsPartialAckOutcome,
+} from './resultsPartialAckController';
 
 const UI_CONTEXT_LINES_KEY = 'codeSearch.ui.contextLines';
 const CONTEXT_LINES_MIN = 0;
 const CONTEXT_LINES_MAX = 10;
+const RESULTS_PARTIAL_ACK_TIMEOUT_MS = 2000;
 
 export class SearchPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'codeSearch.panel';
@@ -21,6 +35,11 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   private webviewReadyWaiters: Array<() => void> = [];
   private panelVisible = false;
   private panelWebviewFocused = false;
+  private autocompleteSeq = 0;
+  private searchSeq = 0;
+  private readonly partialAckController = new ResultsPartialAckController();
+  private readonly profileSessions = new Map<number, SearchProfileSession>();
+  private readonly profileFinalizations = new Map<number, Promise<string | undefined>>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -41,6 +60,22 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     this.sendIndexStatus();
   }
 
+  async dispose(): Promise<void> {
+    await this.disposeActiveSearches();
+    this.view = undefined;
+    this.webviewReady = false;
+    this.panelVisible = false;
+    this.panelWebviewFocused = false;
+    this.resolveWebviewReadyWaiters();
+    this.updatePanelFocusContext();
+  }
+
+  async disposeActiveSearches(): Promise<void> {
+    this.searchSeq++;
+    this.partialAckController.cancelActive();
+    await this.finalizeAllProfiles('disposed');
+  }
+
   resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
@@ -55,12 +90,28 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.getHtml(webviewView.webview);
 
-    webviewView.onDidChangeVisibility((visible) => {
+    webviewView.onDidChangeVisibility(() => {
+      const visible = webviewView.visible;
       this.panelVisible = visible;
       if (!visible) {
         this.panelWebviewFocused = false;
       }
       this.updatePanelFocusContext();
+    });
+
+    webviewView.onDidDispose(() => {
+      if (this.view !== webviewView) {
+        return;
+      }
+      this.view = undefined;
+      this.webviewReady = false;
+      this.panelVisible = false;
+      this.panelWebviewFocused = false;
+      this.searchSeq++;
+      this.partialAckController.cancelActive();
+      this.resolveWebviewReadyWaiters();
+      this.updatePanelFocusContext();
+      void this.finalizeAllProfiles('disposed');
     });
 
     webviewView.webview.onDidReceiveMessage(async (msg) => {
@@ -118,6 +169,16 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
         case 'copyToClipboard':
           if (typeof msg.text === 'string') {
             await vscode.env.clipboard.writeText(msg.text);
+          }
+          break;
+        case 'profileMark':
+          if (typeof msg.phase === 'string' && Number.isInteger(msg.searchId)) {
+            this.profileSessions.get(msg.searchId)?.mark(msg.phase, msg.data, 'webview');
+          }
+          break;
+        case 'resultsPartialAck':
+          if (Number.isInteger(msg.searchId) && Number.isInteger(msg.chunkId)) {
+            this.partialAckController.acknowledge(msg.searchId, msg.chunkId);
           }
           break;
       }
@@ -251,9 +312,11 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     showContext?: boolean,
     contextLines?: number
   ): Promise<MultiSearchResult | undefined> {
+    const seq = ++this.searchSeq;
+    this.partialAckController.cancelActive();
     const config = getConfig();
     const effectiveContextLines = contextLines ?? this.getUiContextLines();
-    const result = this.searchService.search(query, {
+    const searchOptions = {
       caseSensitive: caseSensitive ?? false,
       phraseSearch: phraseSearch ?? config.phraseSearchDefault,
       contextLines: showContext ? effectiveContextLines : 0,
@@ -261,50 +324,281 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       fuzzy: fuzzy ?? config.fuzzySearchDefault,
       loose: loose ?? false,
       looseGap: config.looseGapDefault,
-    });
+    };
 
-    let highlighted;
+    const profileSession = config.profileSearch
+      ? beginSearchProfile(
+          {
+            version: String(this.context.extension.packageJSON.version ?? '0.0.0'),
+            query,
+            options: searchOptions,
+          },
+          {
+            globalStoragePath: this.context.globalStorageUri.fsPath,
+            workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          }
+        )
+      : undefined;
+    if (profileSession) {
+      this.profileSessions.set(seq, profileSession);
+    }
+    void this.finalizeSupersededProfiles(seq);
+    profileSession?.mark('provider_runSearch_start');
+
+    let finalResult: MultiSearchResult | undefined;
     try {
-      const reg = await createRegistry(this.extensionUri);
-      highlighted = await highlightHits(
-        result.hits.map((h) => ({
-          lineText: h.lineText,
-          path: h.localPath ?? h.path,
-          matchStart: h.matchStart,
-          matchEnd: h.matchEnd,
-        })),
-        reg
-      );
-    } catch {
-      highlighted = result.hits.map((h) => ({
-        tokens: [{ text: h.lineText }],
-        matchStart: h.matchStart,
-        matchEnd: h.matchEnd,
-      }));
+      this.postMessage({
+        type: 'searchStarted',
+        searchId: seq,
+        tabId,
+        query,
+        profileSearch: config.profileSearch,
+      });
+      profileSession?.mark('provider_searchStarted_sent');
+      await yieldToEventLoop();
+
+    if (seq !== this.searchSeq) {
+      await this.finalizeProfile(seq, 'cancelled');
+      return undefined;
     }
 
-    const payload = {
-      type: 'results' as const,
-      tabId,
-      result: {
-        ...result,
-        hits: result.hits.map((h, i) => ({
+    const queue: MultiSearchStreamBatch[] = [];
+    let searchDone = false;
+    let producerError: unknown;
+    const registryPromise = createRegistry(this.extensionUri).catch(() => undefined);
+
+    const produce = async () => {
+      try {
+        for await (const batch of this.searchService.searchStreaming(query, searchOptions)) {
+          if (seq !== this.searchSeq) {
+            return;
+          }
+          queue.push(batch);
+        }
+      } catch (error) {
+        producerError = error;
+      } finally {
+        searchDone = true;
+        profileSession?.mark('provider_search_producer_done', {
+          error: producerError instanceof Error ? producerError.message : undefined,
+        });
+      }
+    };
+    void (profileSession ? runWithSearchProfile(profileSession, produce) : produce());
+
+    const allHits: MultiSearchResult['hits'] = [];
+    let uiBatchIndex = 0;
+    const chunkCounter = { value: 0 };
+
+    while (!searchDone || queue.length > 0) {
+      if (seq !== this.searchSeq) {
+        await this.finalizeProfile(seq, 'cancelled');
+        return undefined;
+      }
+
+      const batch = queue.shift();
+      if (!batch) {
+        await yieldToEventLoop();
+        continue;
+      }
+
+      if (uiBatchIndex === 0 && batch.hits.length > 0) {
+        profileSession?.mark('provider_first_batch_dequeued', { batchHits: batch.hits.length });
+      }
+
+      const skipHighlight = uiBatchIndex === 0 && batch.hits.length > 0;
+      let mappedHits: MultiSearchResult['hits'];
+
+      const highlightStart = Date.now();
+      if (skipHighlight) {
+        mappedHits = batch.hits.map((h) => ({
+          ...h,
+          relativePath: getRelativePath(h.localPath, this.workspaceRoots),
+          indexLabel: h.indexName,
+        }));
+      } else if (batch.hits.length === 0) {
+        mappedHits = [];
+      } else {
+        const registry = await registryPromise;
+        let highlighted;
+        try {
+          highlighted = highlightHitsSync(
+            batch.hits.map((h) => ({
+              lineText: h.lineText,
+              path: h.localPath ?? h.path,
+              matchStart: h.matchStart,
+              matchEnd: h.matchEnd,
+            })),
+            registry
+          );
+        } catch {
+          highlighted = batch.hits.map((h) => ({
+            tokens: [{ text: h.lineText }],
+            matchStart: h.matchStart,
+            matchEnd: h.matchEnd,
+          }));
+        }
+
+        mappedHits = batch.hits.map((h, i) => ({
           ...h,
           relativePath: getRelativePath(h.localPath, this.workspaceRoots),
           indexLabel: h.indexName,
           highlighted: highlighted[i],
-        })),
-      },
-    };
+        }));
+      }
+      profileSession?.mark('provider_highlight_batch', {
+        skipHighlight,
+        batchHits: batch.hits.length,
+        ms: Date.now() - highlightStart,
+      });
 
-    this.postMessage(payload);
+      if (seq !== this.searchSeq) {
+        await this.finalizeProfile(seq, 'cancelled');
+        return undefined;
+      }
 
-    if (config.autoOpenSingleHit && result.hitCount === 1 && result.hits[0]) {
-      const hit = result.hits[0];
+      if (batch.hits.length > 0) {
+        uiBatchIndex++;
+      }
+
+      const batchStartIndex = allHits.length;
+      allHits.push(...mappedHits);
+
+      await this.postResultsPartialChunks(tabId, mappedHits, {
+        done: batch.done,
+        hitCount: batch.hitCount,
+        fileCount: batch.fileCount,
+        elapsedMs: batch.elapsedMs,
+        partialIndex: batch.partialIndex,
+        query: batch.query,
+      }, skipHighlight, seq, chunkCounter, profileSession);
+
+      if (skipHighlight && mappedHits.length > 0 && seq === this.searchSeq) {
+        const patchStart = Date.now();
+        const registry = await registryPromise;
+        if (seq !== this.searchSeq) {
+          await this.finalizeProfile(seq, 'cancelled');
+          return undefined;
+        }
+        let highlighted;
+        try {
+          highlighted = highlightHitsSync(
+            batch.hits.map((h) => ({
+              lineText: h.lineText,
+              path: h.localPath ?? h.path,
+              matchStart: h.matchStart,
+              matchEnd: h.matchEnd,
+            })),
+            registry
+          );
+        } catch {
+          highlighted = batch.hits.map((h) => ({
+            tokens: [{ text: h.lineText }],
+            matchStart: h.matchStart,
+            matchEnd: h.matchEnd,
+          }));
+        }
+        for (let i = 0; i < mappedHits.length; i++) {
+          (mappedHits[i] as MultiSearchResult['hits'][number] & { highlighted?: unknown }).highlighted = highlighted[i];
+        }
+        this.postMessage({
+          type: 'resultsHighlightPatch',
+          searchId: seq,
+          tabId,
+          startIndex: batchStartIndex,
+          highlighted,
+        });
+        profileSession?.mark('provider_highlight_first_patch', {
+          batchHits: mappedHits.length,
+          ms: Date.now() - patchStart,
+        });
+        await yieldToEventLoop();
+      }
+
+      if (batch.done) {
+        finalResult = {
+          hits: allHits,
+          hitCount: batch.hitCount,
+          fileCount: batch.fileCount,
+          elapsedMs: batch.elapsedMs,
+          query: batch.query,
+          partialIndex: batch.partialIndex,
+        };
+      }
+    }
+
+    if (seq !== this.searchSeq) {
+      await this.finalizeProfile(seq, 'cancelled');
+      return undefined;
+    }
+
+    if (producerError) {
+      const message = producerError instanceof Error ? producerError.message : String(producerError);
+      profileSession?.mark('provider_search_failed', { message });
+      this.postMessage({ type: 'searchFailed', searchId: seq, tabId, message });
+      await this.finalizeProfile(seq, 'error', producerError);
+      return undefined;
+    }
+
+    if (!finalResult) {
+      const error = new Error('Search stream ended without a final batch');
+      profileSession?.mark('provider_search_failed', { message: error.message });
+      this.postMessage({ type: 'searchFailed', searchId: seq, tabId, message: error.message });
+      await this.finalizeProfile(seq, 'error', error);
+      return undefined;
+    }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      profileSession?.mark('provider_search_failed', { message });
+      const wasCurrentSearch = seq === this.searchSeq;
+      if (wasCurrentSearch) {
+        this.postMessage({ type: 'searchFailed', searchId: seq, tabId, message });
+        this.searchSeq++;
+        this.partialAckController.cancelActive();
+      }
+      await this.finalizeProfile(
+        seq,
+        wasCurrentSearch ? 'error' : 'cancelled',
+        error
+      );
+      return undefined;
+    }
+
+    profileSession?.mark('provider_runSearch_done', { hitCount: finalResult.hitCount });
+
+    if (profileSession) {
+      let logPath: string | undefined;
+      try {
+        logPath = await this.finalizeProfile(seq, 'success');
+      } catch (error) {
+        void vscode.window.showWarningMessage(
+          `Ace Code Search: 无法保存 Profile: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        this.profileSessions.delete(seq);
+      }
+      if (logPath && seq === this.searchSeq) {
+        const openLabel = '打开日志文件夹';
+        void vscode.window
+          .showInformationMessage(`Ace Code Search: Profile 已保存: ${logPath}`, openLabel)
+          .then((choice) => {
+            if (choice === openLabel) {
+              void revealProfileLogFolder(this.context);
+            }
+          });
+      }
+    }
+
+    if (seq !== this.searchSeq) {
+      return undefined;
+    }
+
+    if (config.autoOpenSingleHit && finalResult.hitCount === 1 && finalResult.hits[0]) {
+      const hit = finalResult.hits[0];
       await this.openHitAt(hit.localPath ?? hit.path, hit.line, hit.column, true);
     }
 
-    return result;
+    return finalResult;
   }
 
   nextHit(): void {
@@ -356,11 +650,100 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   private async setUiContextLines(lines: number): Promise<void> {
     const clamped = Math.max(CONTEXT_LINES_MIN, Math.min(CONTEXT_LINES_MAX, lines));
     await this.context.globalState.update(UI_CONTEXT_LINES_KEY, clamped);
-    this.postMessage({ type: 'init', contextLines: clamped });
+    this.postMessage(this.buildInitMessage(clamped));
   }
 
   private sendInitConfig(): void {
-    this.postMessage({ type: 'init', contextLines: this.getUiContextLines() });
+    this.postMessage(this.buildInitMessage(this.getUiContextLines()));
+  }
+
+  private buildInitMessage(contextLines: number): {
+    type: 'init';
+    contextLines: number;
+    version: string;
+    profileSearch: boolean;
+  } {
+    return {
+      type: 'init',
+      contextLines,
+      version: this.context.extension.packageJSON.version as string,
+      profileSearch: getConfig().profileSearch,
+    };
+  }
+
+  private async finalizeProfile(
+    searchId: number,
+    outcome: SearchProfileOutcome,
+    error?: unknown
+  ): Promise<string | undefined> {
+    const existing = this.profileFinalizations.get(searchId);
+    if (existing) {
+      return existing;
+    }
+    const session = this.profileSessions.get(searchId);
+    if (!session) {
+      return undefined;
+    }
+
+    const finalization = (async () => {
+      try {
+        return await session.finalize(outcome, error);
+      } catch (writeError) {
+        void vscode.window.showWarningMessage(
+          `Ace Code Search: unable to save search profile: ${writeError instanceof Error ? writeError.message : String(writeError)}`
+        );
+        return undefined;
+      } finally {
+        if (this.profileSessions.get(searchId) === session) {
+          this.profileSessions.delete(searchId);
+        }
+        this.profileFinalizations.delete(searchId);
+      }
+    })();
+    this.profileFinalizations.set(searchId, finalization);
+    return finalization;
+  }
+
+  private async finalizeSupersededProfiles(currentSearchId: number): Promise<void> {
+    const staleIds = [...this.profileSessions.keys()].filter(
+      (searchId) => searchId < currentSearchId
+    );
+    await Promise.all(staleIds.map((searchId) => this.finalizeProfile(searchId, 'cancelled')));
+  }
+
+  private async finalizeAllProfiles(outcome: SearchProfileOutcome): Promise<void> {
+    const searchIds = [...this.profileSessions.keys()];
+    await Promise.all(searchIds.map((searchId) => this.finalizeProfile(searchId, outcome)));
+  }
+
+  private async waitForResultsPartialAck(
+    searchId: number,
+    chunkId: number,
+    profileSession?: SearchProfileSession
+  ): Promise<ResultsPartialAckOutcome> {
+    if (searchId !== this.searchSeq) {
+      return 'cancelled';
+    }
+    const waitStart = performance.now();
+    const outcome = await this.partialAckController.waitFor(
+      searchId,
+      chunkId,
+      RESULTS_PARTIAL_ACK_TIMEOUT_MS
+    );
+    const waitMs = Math.max(0, performance.now() - waitStart);
+    profileSession?.mark('provider_resultsPartial_ack', {
+      searchId,
+      chunkId,
+      outcome,
+      waitMs,
+    });
+    if (outcome === 'timeout') {
+      profileSession?.mark('provider_resultsPartial_ack_timeout', { searchId, chunkId, waitMs });
+    }
+    if (profileSession && (chunkId === 1 || outcome === 'timeout')) {
+      await profileSession.checkpoint().catch(() => undefined);
+    }
+    return outcome;
   }
 
   private updatePanelFocusContext(): void {
@@ -372,8 +755,132 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private handleAutocomplete(prefix: string): void {
-    const suggestions = this.indexManager.getTokenSuggestions(prefix, 20);
-    this.postMessage({ type: 'autocomplete', prefix, suggestions });
+    const seq = ++this.autocompleteSeq;
+    setImmediate(() => {
+      if (seq !== this.autocompleteSeq) {
+        return;
+      }
+      const suggestions = this.indexManager.getTokenSuggestions(prefix, 20);
+      if (seq !== this.autocompleteSeq) {
+        return;
+      }
+      this.postMessage({ type: 'autocomplete', prefix, suggestions });
+    });
+  }
+
+  private async postResultsPartialChunks(
+    tabId: string | undefined,
+    hits: MultiSearchResult['hits'],
+    meta: {
+      done: boolean;
+      hitCount: number;
+      fileCount: number;
+      elapsedMs: number;
+      partialIndex: boolean;
+      query: string;
+    },
+    plainFirstBatch: boolean,
+    searchSeq: number,
+    chunkCounter: { value: number },
+    profileSession?: SearchProfileSession
+  ): Promise<void> {
+    if (hits.length === 0) {
+      const chunkId = ++chunkCounter.value;
+      const ackPromise = this.waitForResultsPartialAck(searchSeq, chunkId, profileSession);
+      void this.postResultsPartialMessage(
+        {
+          type: 'resultsPartial',
+          searchId: searchSeq,
+          chunkId,
+          tabId,
+          hits: [],
+          done: meta.done,
+          hitCount: meta.hitCount,
+          fileCount: meta.fileCount,
+          elapsedMs: meta.elapsedMs,
+          partialIndex: meta.partialIndex,
+          query: meta.query,
+        },
+        searchSeq,
+        chunkId
+      );
+      profileSession?.mark('provider_resultsPartial_sent', {
+        chunkId,
+        batchHits: 0,
+        hitCount: meta.hitCount,
+        done: meta.done,
+      });
+      const ackOutcome = await ackPromise;
+      if (ackOutcome === 'cancelled') {
+        if (searchSeq !== this.searchSeq) {
+          return;
+        }
+        throw new Error(`Webview did not accept results chunk ${chunkId}`);
+      }
+      await yieldToEventLoop();
+      return;
+    }
+
+    for (let offset = 0; offset < hits.length;) {
+      if (searchSeq !== this.searchSeq) {
+        return;
+      }
+      const chunkSize = plainFirstBatch && offset === 0
+        ? Math.min(FIRST_BATCH_SIZE, hits.length)
+        : UI_POST_CHUNK_SIZE;
+      const chunk = hits.slice(offset, offset + chunkSize);
+      const isLastChunk = offset + chunk.length >= hits.length;
+      const chunkId = ++chunkCounter.value;
+      const ackPromise = this.waitForResultsPartialAck(searchSeq, chunkId, profileSession);
+      void this.postResultsPartialMessage(
+        {
+          type: 'resultsPartial',
+          searchId: searchSeq,
+          chunkId,
+          tabId,
+          hits: chunk,
+          done: meta.done && isLastChunk,
+          hitCount: meta.hitCount,
+          fileCount: meta.fileCount,
+          elapsedMs: meta.elapsedMs,
+          partialIndex: meta.partialIndex,
+          query: meta.query,
+          ...(plainFirstBatch && offset === 0 ? { plainFirstBatch: true } : {}),
+        },
+        searchSeq,
+        chunkId
+      );
+      profileSession?.mark('provider_resultsPartial_sent', {
+        chunkId,
+        batchHits: chunk.length,
+        hitCount: meta.hitCount,
+        done: meta.done && isLastChunk,
+      });
+      const ackOutcome = await ackPromise;
+      if (ackOutcome === 'cancelled') {
+        if (searchSeq !== this.searchSeq) {
+          return;
+        }
+        throw new Error(`Webview did not accept results chunk ${chunkId}`);
+      }
+      await yieldToEventLoop();
+      offset += chunk.length;
+    }
+  }
+
+  private async postResultsPartialMessage(
+    message: unknown,
+    searchId: number,
+    chunkId: number
+  ): Promise<void> {
+    try {
+      const delivered = await this.view?.webview.postMessage(message);
+      if (!delivered) {
+        this.partialAckController.cancel(searchId, chunkId);
+      }
+    } catch {
+      this.partialAckController.cancel(searchId, chunkId);
+    }
   }
 
   private postMessage(msg: unknown): void {
@@ -385,6 +892,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'main.js')
     );
     const nonce = getNonce();
+    const version = this.context.extension.packageJSON.version as string;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -517,11 +1025,24 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     .status-bar {
       display: flex;
       justify-content: space-between;
+      gap: 12px;
       padding: 4px 8px;
       font-size: 11px;
       color: var(--vscode-descriptionForeground);
       border-bottom: 1px solid var(--vscode-panel-border);
       flex-shrink: 0;
+    }
+    .status-hits {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status-meta {
+      display: flex;
+      gap: 8px;
+      flex-shrink: 0;
+      white-space: nowrap;
     }
     .results {
       flex: 1;
@@ -748,11 +1269,14 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     </span>
     <button class="btn" id="btnRefresh" title="Refresh index">⟳</button>
     <button class="btn" id="btnManage" title="Manage indexes">⚙</button>
-    <button class="btn" id="btnSettings" title="Open Ace Code Search settings">Set</button>
+    <button class="btn" id="btnSettings" title="Open Ace Code Search settings">☰</button>
   </div>
   <div class="status-bar">
-    <span id="statusHits">Ready</span>
-    <span id="statusIndex">Index: idle</span>
+    <span id="statusHits" class="status-hits">Ready</span>
+    <span class="status-meta">
+      <span id="statusIndex">Index: idle</span>
+      <span id="statusVersion">v${version}</span>
+    </span>
   </div>
   <div class="results" id="results"></div>
   <div class="result-context-menu" id="resultContextMenu">

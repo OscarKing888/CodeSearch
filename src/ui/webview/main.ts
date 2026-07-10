@@ -68,6 +68,25 @@ interface Tab {
   sortColumn: SortColumn;
   sortDirection: SortDirection;
   showContext: boolean;
+  searching?: boolean;
+  streamBatchCount?: number;
+  activeSearchId?: number;
+  completedSearchId?: number;
+  needsRender?: boolean;
+}
+
+interface PartialAckIdentity {
+  searchId: number;
+  chunkId: number;
+}
+
+interface PendingAppend {
+  tabId: string;
+  searchId: number;
+  hits: HitPayload[];
+  startIndex: number;
+  plain: boolean;
+  acknowledgements: PartialAckIdentity[];
 }
 
 const searchInput = document.getElementById('searchInput') as HTMLInputElement;
@@ -87,6 +106,7 @@ const btnManage = document.getElementById('btnManage') as HTMLButtonElement;
 const btnSettings = document.getElementById('btnSettings') as HTMLButtonElement;
 const statusHits = document.getElementById('statusHits') as HTMLSpanElement;
 const statusIndex = document.getElementById('statusIndex') as HTMLSpanElement;
+const statusVersion = document.getElementById('statusVersion') as HTMLSpanElement;
 const resultsEl = document.getElementById('results') as HTMLDivElement;
 const resultContextMenu = document.getElementById('resultContextMenu') as HTMLDivElement;
 
@@ -96,11 +116,179 @@ let caseSensitive = false;
 let phraseSearch = true;
 let fuzzy = false;
 let loose = false;
-let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 let acTimer: ReturnType<typeof setTimeout> | undefined;
 let suggestions: Suggestion[] = [];
 let acActiveIndex = -1;
 let configContextLines = 1;
+let extensionVersion = '';
+let profileSearchEnabled = false;
+let profileSearchStartMs = 0;
+let profileFirstResultsSearchId: number | undefined;
+let activeProfileSearchId: number | undefined;
+let latestSearchId = 0;
+
+let pendingAppend: PendingAppend | undefined;
+let pendingAppendFrame: number | undefined;
+
+function isMessageId(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
+function resolveMessageTab(tabId: unknown): Tab | undefined {
+  return typeof tabId === 'string' ? tabs.find((tab) => tab.id === tabId) : getActiveTab();
+}
+
+function stopOlderSearchStates(searchId: number): void {
+  for (const tab of tabs) {
+    if (tab.searching && tab.activeSearchId !== undefined && tab.activeSearchId < searchId) {
+      tab.searching = false;
+    }
+  }
+}
+
+function sendResultsPartialAck(identity: PartialAckIdentity): void {
+  vscode.postMessage({ type: 'resultsPartialAck', ...identity });
+}
+
+function discardPendingAppend(sendAck = true): void {
+  if (pendingAppendFrame !== undefined) {
+    cancelAnimationFrame(pendingAppendFrame);
+    pendingAppendFrame = undefined;
+  }
+  const discarded = pendingAppend;
+  pendingAppend = undefined;
+  const tab = discarded ? tabs.find((candidate) => candidate.id === discarded.tabId) : undefined;
+  if (tab) {
+    tab.needsRender = true;
+  }
+  if (sendAck && discarded) {
+    for (const identity of discarded.acknowledgements) {
+      sendResultsPartialAck(identity);
+    }
+  }
+}
+
+function flushPendingAppends(): void {
+  pendingAppendFrame = undefined;
+  const append = pendingAppend;
+  pendingAppend = undefined;
+  if (!append) {
+    return;
+  }
+
+  const tab = tabs.find((candidate) => candidate.id === append.tabId);
+  if (
+    tab &&
+    tab.activeSearchId === append.searchId &&
+    tab.id === activeTabId &&
+    document.visibilityState === 'visible'
+  ) {
+    const appendStart = performance.now();
+    appendResultRows(tab, append.hits, append.startIndex, append.plain);
+    tab.streamBatchCount = (tab.streamBatchCount ?? 0) + 1;
+    profileMarkWebview('webview_append_rows', {
+      hits: append.hits.length,
+      ms: Math.round(performance.now() - appendStart),
+      deferred: true,
+    }, append.searchId);
+  } else if (tab) {
+    tab.needsRender = true;
+  }
+
+  for (const identity of append.acknowledgements) {
+    sendResultsPartialAck(identity);
+  }
+}
+
+function schedulePendingAppend(
+  hits: HitPayload[],
+  startIndex: number,
+  plain: boolean,
+  tab: Tab,
+  identity: PartialAckIdentity
+): void {
+  const canMerge =
+    pendingAppend?.tabId === tab.id &&
+    pendingAppend.searchId === identity.searchId &&
+    pendingAppend.startIndex + pendingAppend.hits.length === startIndex;
+  if (pendingAppend && !canMerge) {
+    discardPendingAppend(true);
+  }
+  if (!pendingAppend) {
+    pendingAppend = {
+      tabId: tab.id,
+      searchId: identity.searchId,
+      hits: [],
+      startIndex,
+      plain,
+      acknowledgements: [],
+    };
+  }
+  pendingAppend.hits.push(...hits);
+  pendingAppend.acknowledgements.push(identity);
+  if (pendingAppendFrame === undefined) {
+    pendingAppendFrame = requestAnimationFrame(flushPendingAppends);
+  }
+}
+
+function flushPendingAppendsNow(): void {
+  if (!pendingAppend) {
+    return;
+  }
+  if (pendingAppendFrame !== undefined) {
+    cancelAnimationFrame(pendingAppendFrame);
+  }
+  flushPendingAppends();
+}
+
+function profileMarkWebview(
+  phase: string,
+  data?: Record<string, unknown>,
+  searchId = activeProfileSearchId
+): void {
+  if (!profileSearchEnabled) {
+    return;
+  }
+  if (!searchId) {
+    return;
+  }
+  vscode.postMessage({
+    type: 'profileMark',
+    searchId,
+    phase,
+    data: {
+      ...data,
+      webviewMs: profileSearchStartMs > 0 ? Math.round(performance.now() - profileSearchStartMs) : 0,
+    },
+  });
+}
+
+function setStatusReady(): void {
+  statusHits.textContent = 'Ready';
+}
+
+function setStatusVersion(version: string): void {
+  statusVersion.textContent = version ? `v${version}` : '';
+}
+
+function setSearchingStatus(hitCount?: number): void {
+  if (hitCount === undefined || hitCount === 0) {
+    statusHits.textContent = 'Searching...';
+  } else {
+    statusHits.textContent = `Searching... ${hitCount.toLocaleString()} hits`;
+  }
+}
+
+function setUpdatingStatus(loadedCount: number, discoveredCount = loadedCount): void {
+  statusHits.textContent = loadedCount < discoveredCount
+    ? `Updating... ${loadedCount.toLocaleString()} loaded / ${discoveredCount.toLocaleString()} found`
+    : `Updating... ${loadedCount.toLocaleString()} hits`;
+}
+
+function setFinalResultStatus(result: SearchResultPayload): void {
+  const partial = result.partialIndex ? ' (partial index)' : '';
+  statusHits.textContent = `${result.hitCount.toLocaleString()} hits in ${result.fileCount} files · ${(result.elapsedMs / 1000).toFixed(2)}s${partial}`;
+}
 
 let tabs: Tab[] = [];
 let activeTabId = '';
@@ -295,6 +483,8 @@ function changeContextLines(next: number): void {
 }
 
 function switchTab(id: string): void {
+  discardPendingAppend(true);
+  hideResultContextMenu();
   const prev = getActiveTab();
   if (prev) {
     prev.query = searchInput.value;
@@ -306,10 +496,23 @@ function switchTab(id: string): void {
     updateQueryHighlight();
     syncContextButton();
     if (tab.results) {
-      renderResults(tab.results, tab.selectedIndex);
+      tab.needsRender = false;
+      if (tab.searching) {
+        renderResults(tab.results, tab.selectedIndex);
+        if (tab.results.hits.length > 0) {
+          setUpdatingStatus(tab.results.hits.length, tab.results.hitCount);
+        } else {
+          setSearchingStatus();
+        }
+      } else {
+        renderResults(tab.results, tab.selectedIndex);
+      }
+    } else if (tab.searching) {
+      resultsEl.innerHTML = '<div class="empty">Searching...</div>';
+      setSearchingStatus();
     } else {
       resultsEl.innerHTML = tab.query ? '' : '<div class="empty">Enter a search query</div>';
-      statusHits.textContent = 'Ready';
+      setStatusReady();
     }
   }
   renderTabs();
@@ -330,13 +533,14 @@ function closeTab(id: string): void {
 }
 
 function newTab(query = ''): Tab {
+  discardPendingAppend(true);
   hideResultContextMenu();
   const tab = createTab(query);
   activeTabId = tab.id;
   searchInput.value = query;
   updateQueryHighlight();
   resultsEl.innerHTML = '<div class="empty">Enter a search query</div>';
-  statusHits.textContent = 'Ready';
+  setStatusReady();
   renderTabs();
   return tab;
 }
@@ -370,8 +574,6 @@ searchInput.addEventListener('input', () => {
     renderTabs();
   }
   updateQueryHighlight();
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => doSearch(false), 250);
   requestAutocomplete();
 });
 
@@ -414,7 +616,6 @@ searchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     e.preventDefault();
     hideAutocomplete();
-    clearTimeout(debounceTimer);
     doSearch(false);
     return;
   }
@@ -488,7 +689,7 @@ function doSearch(forceNewTab: boolean): void {
 
   if (!query) {
     resultsEl.innerHTML = '<div class="empty">Enter a search query</div>';
-    statusHits.textContent = 'Ready';
+    setStatusReady();
     return;
   }
 
@@ -683,6 +884,50 @@ function getSortedIndices(
   return indices;
 }
 
+function reorderRenderedRows(tab: Tab): void {
+  const result = tab.results;
+  const tbody = resultsEl.querySelector('table.results-table tbody');
+  if (!result || !tbody) {
+    if (result) {
+      renderResults(result, tab.selectedIndex, tab);
+    }
+    return;
+  }
+
+  const groups = new Map<number, Element[]>();
+  const currentOrder: number[] = [];
+  for (const row of Array.from(tbody.children)) {
+    const index = Number((row as HTMLElement).dataset.hitIndex);
+    if (!Number.isInteger(index)) {
+      continue;
+    }
+    const group = groups.get(index) ?? [];
+    group.push(row);
+    groups.set(index, group);
+    if (currentOrder[currentOrder.length - 1] !== index) {
+      currentOrder.push(index);
+    }
+  }
+
+  if (groups.size !== result.hits.length) {
+    renderResults(result, tab.selectedIndex, tab);
+    return;
+  }
+
+  const sorted = getSortedIndices(result.hits, tab.sortColumn, tab.sortDirection);
+  if (sorted.every((index, position) => currentOrder[position] === index)) {
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const index of sorted) {
+    for (const row of groups.get(index) ?? []) {
+      fragment.appendChild(row);
+    }
+  }
+  tbody.appendChild(fragment);
+}
+
 function navigateHit(direction: 'next' | 'prev'): void {
   const tab = getActiveTab();
   const hits = tab?.results?.hits;
@@ -727,21 +972,93 @@ function selectHit(originalIndex: number): void {
   });
 }
 
-function renderResults(result: SearchResultPayload, selectedIndex = -1): void {
-  const partial = result.partialIndex ? ' (partial index)' : '';
-  statusHits.textContent = `${result.hitCount.toLocaleString()} hits in ${result.fileCount} files · ${(result.elapsedMs / 1000).toFixed(2)}s${partial}`;
+function renderResults(
+  result: SearchResultPayload,
+  selectedIndex = -1,
+  tab = getActiveTab()
+): void {
+  if (tab && pendingAppend?.tabId === tab.id) {
+    discardPendingAppend(true);
+  }
+  if (tab) {
+    tab.needsRender = false;
+  }
+  if (tab?.searching) {
+    if (result.hitCount > 0) {
+      setUpdatingStatus(result.hits.length, result.hitCount);
+    } else {
+      setSearchingStatus();
+    }
+  } else {
+    setFinalResultStatus(result);
+  }
 
   if (result.hits.length === 0) {
-    resultsEl.innerHTML = '<div class="empty">No results found</div>';
+    resultsEl.innerHTML = tab?.searching
+      ? '<div class="empty">Searching...</div>'
+      : '<div class="empty">No results found</div>';
     return;
   }
 
-  const tab = getActiveTab();
   const sortColumn = tab?.sortColumn ?? 'path';
   const sortDirection = tab?.sortDirection ?? 'asc';
   const showContext = tab?.showContext ?? false;
   const sortedIndices = getSortedIndices(result.hits, sortColumn, sortDirection);
 
+  const table = createResultsTable(sortColumn, sortDirection);
+  const tbody = table.querySelector('tbody') as HTMLTableSectionElement;
+
+  for (const originalIndex of sortedIndices) {
+    appendHitToParent(
+      tbody,
+      result.hits[originalIndex],
+      originalIndex,
+      originalIndex === selectedIndex,
+      showContext
+    );
+  }
+
+  resultsEl.innerHTML = '';
+  resultsEl.appendChild(table);
+}
+
+function initResultsTable(tab: Tab): HTMLTableSectionElement {
+  const sortColumn = tab.sortColumn;
+  const sortDirection = tab.sortDirection;
+  const table = createResultsTable(sortColumn, sortDirection);
+  resultsEl.innerHTML = '';
+  resultsEl.appendChild(table);
+  return table.querySelector('tbody') as HTMLTableSectionElement;
+}
+
+function appendResultRows(
+  tab: Tab,
+  hits: HitPayload[],
+  startIndex: number,
+  plainLine = false
+): void {
+  let tbody = resultsEl.querySelector('table.results-table tbody') as HTMLTableSectionElement | null;
+  if (!tbody) {
+    tbody = initResultsTable(tab);
+  }
+  const showContext = tab.showContext;
+  const selectedIndex = tab.selectedIndex;
+  const fragment = document.createDocumentFragment();
+  for (let i = 0; i < hits.length; i++) {
+    const originalIndex = startIndex + i;
+    appendHitToParent(
+      fragment,
+      hits[i],
+      originalIndex,
+      originalIndex === selectedIndex,
+      showContext,
+      plainLine
+    );
+  }
+  tbody.appendChild(fragment);
+}
+
+function createResultsTable(sortColumn: SortColumn, sortDirection: SortDirection): HTMLTableElement {
   const table = document.createElement('table');
   table.className = 'results-table';
 
@@ -800,77 +1117,89 @@ function renderResults(result: SearchResultPayload, selectedIndex = -1): void {
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  for (const originalIndex of sortedIndices) {
-    const hit = result.hits[originalIndex];
-    const isSelected = originalIndex === selectedIndex;
-    const badge = hit.indexLabel ? ` [${hit.indexLabel}]` : '';
+  table.appendChild(tbody);
+  return table;
+}
 
-    const addContextRow = (text: string) => {
-      const tr = document.createElement('tr');
-      tr.className = 'hit-context-row' + (isSelected ? ' selected' : '');
-      tr.dataset.hitIndex = String(originalIndex);
-      const emptyPath = document.createElement('td');
-      emptyPath.className = 'col-path';
-      const emptyLine = document.createElement('td');
-      emptyLine.className = 'col-line';
-      const codeTd = document.createElement('td');
-      codeTd.className = 'col-code';
-      codeTd.textContent = text;
-      tr.appendChild(emptyPath);
-      tr.appendChild(emptyLine);
-      tr.appendChild(codeTd);
-      tr.addEventListener('click', () => {
-        selectHit(originalIndex);
-        openHitFile(hit, true);
-      });
-      tbody.appendChild(tr);
-    };
+function appendHitToParent(
+  parent: Node,
+  hit: HitPayload,
+  originalIndex: number,
+  isSelected: boolean,
+  showContext: boolean,
+  plainLine = false
+): void {
+  const badge = hit.indexLabel ? ` [${hit.indexLabel}]` : '';
 
-    if (showContext) {
-      for (const ctx of hit.contextBefore) {
-        addContextRow(ctx);
-      }
-    }
-
+  const addContextRow = (text: string) => {
     const tr = document.createElement('tr');
-    tr.className = 'hit-row' + (isSelected ? ' selected' : '');
+    tr.className = 'hit-context-row' + (isSelected ? ' selected' : '');
     tr.dataset.hitIndex = String(originalIndex);
-
-    const pathTd = document.createElement('td');
-    pathTd.className = 'col-path';
-    const fullPath = hit.relativePath + badge;
-    pathTd.textContent = getFileName(hit.relativePath) + badge;
-    pathTd.title = fullPath;
-
-    const lineTd = document.createElement('td');
-    lineTd.className = 'col-line';
-    lineTd.textContent = String(hit.line);
-
+    const emptyPath = document.createElement('td');
+    emptyPath.className = 'col-path';
+    const emptyLine = document.createElement('td');
+    emptyLine.className = 'col-line';
     const codeTd = document.createElement('td');
-    codeTd.className = 'col-code hit-line';
-    renderHighlightedLine(codeTd, hit);
-
-    tr.appendChild(pathTd);
-    tr.appendChild(lineTd);
+    codeTd.className = 'col-code';
+    codeTd.textContent = text;
+    tr.appendChild(emptyPath);
+    tr.appendChild(emptyLine);
     tr.appendChild(codeTd);
-
     tr.addEventListener('click', () => {
       selectHit(originalIndex);
       openHitFile(hit, true);
     });
+    parent.appendChild(tr);
+  };
 
-    tbody.appendChild(tr);
-
-    if (showContext) {
-      for (const ctx of hit.contextAfter) {
-        addContextRow(ctx);
-      }
+  if (showContext) {
+    for (const ctx of hit.contextBefore) {
+      addContextRow(ctx);
     }
   }
-  table.appendChild(tbody);
 
-  resultsEl.innerHTML = '';
-  resultsEl.appendChild(table);
+  const tr = document.createElement('tr');
+  tr.className = 'hit-row' + (isSelected ? ' selected' : '');
+  tr.dataset.hitIndex = String(originalIndex);
+
+  const pathTd = document.createElement('td');
+  pathTd.className = 'col-path';
+  const fullPath = hit.relativePath + badge;
+  pathTd.textContent = getFileName(hit.relativePath) + badge;
+  pathTd.title = fullPath;
+
+  const lineTd = document.createElement('td');
+  lineTd.className = 'col-line';
+  lineTd.textContent = String(hit.line);
+
+  const codeTd = document.createElement('td');
+  codeTd.className = 'col-code hit-line';
+  if (plainLine) {
+    if (hit.matchStart < hit.matchEnd) {
+      wrapMatch(codeTd, hit.lineText, hit.matchStart, hit.matchEnd);
+    } else {
+      codeTd.textContent = hit.lineText;
+    }
+  } else {
+    renderHighlightedLine(codeTd, hit);
+  }
+
+  tr.appendChild(pathTd);
+  tr.appendChild(lineTd);
+  tr.appendChild(codeTd);
+
+  tr.addEventListener('click', () => {
+    selectHit(originalIndex);
+    openHitFile(hit, true);
+  });
+
+  parent.appendChild(tr);
+
+  if (showContext) {
+    for (const ctx of hit.contextAfter) {
+      addContextRow(ctx);
+    }
+  }
 }
 
 function renderHighlightedLine(container: HTMLElement, hit: HitPayload): void {
@@ -943,15 +1272,230 @@ window.addEventListener('message', (event) => {
   switch (msg.type) {
     case 'init':
       configContextLines = msg.contextLines ?? 1;
+      extensionVersion = typeof msg.version === 'string' ? msg.version : '';
+      profileSearchEnabled = Boolean(msg.profileSearch);
+      setStatusVersion(extensionVersion);
       syncContextButton();
+      if (!getActiveTab()?.searching) {
+        setStatusReady();
+      }
       break;
     case 'results': {
       const tab = tabs.find((t) => t.id === msg.tabId) ?? getActiveTab();
       if (tab) {
         tab.results = msg.result;
         tab.selectedIndex = -1;
+        tab.searching = false;
+        tab.streamBatchCount = 0;
         if (tab.id === activeTabId) {
           renderResults(msg.result);
+        }
+      }
+      break;
+    }
+    case 'searchStarted': {
+      if (!isMessageId(msg.searchId) || msg.searchId < latestSearchId) {
+        break;
+      }
+      latestSearchId = msg.searchId;
+      stopOlderSearchStates(msg.searchId);
+      discardPendingAppend(true);
+      if (typeof msg.profileSearch === 'boolean') {
+        profileSearchEnabled = msg.profileSearch;
+      }
+      activeProfileSearchId = msg.searchId;
+      profileSearchStartMs = performance.now();
+      profileMarkWebview('webview_searchStarted', undefined, msg.searchId);
+      const tab = resolveMessageTab(msg.tabId);
+      if (tab) {
+        hideResultContextMenu();
+        if (tab.activeSearchId === undefined || msg.searchId > tab.activeSearchId) {
+          tab.activeSearchId = msg.searchId;
+          tab.completedSearchId = undefined;
+          tab.streamBatchCount = 0;
+          tab.needsRender = false;
+          tab.results = {
+            hits: [],
+            hitCount: 0,
+            fileCount: 0,
+            elapsedMs: 0,
+            query: typeof msg.query === 'string' ? msg.query : tab.query,
+            partialIndex: false,
+          };
+          tab.selectedIndex = -1;
+          if (tab.id === activeTabId) {
+            setSearchingStatus();
+            resultsEl.innerHTML = '<div class="empty">Searching...</div>';
+          }
+        } else if (tab.activeSearchId === msg.searchId && typeof msg.query === 'string' && tab.results) {
+          tab.results.query = msg.query;
+        }
+        if (tab.activeSearchId === msg.searchId) {
+          tab.searching = tab.completedSearchId !== msg.searchId;
+        }
+      }
+      break;
+    }
+    case 'resultsPartial': {
+      if (!isMessageId(msg.searchId) || !isMessageId(msg.chunkId)) {
+        break;
+      }
+      const identity: PartialAckIdentity = { searchId: msg.searchId, chunkId: msg.chunkId };
+      const tab = resolveMessageTab(msg.tabId);
+      if (!tab) {
+        sendResultsPartialAck(identity);
+        break;
+      }
+
+      if (tab.activeSearchId !== undefined && msg.searchId < tab.activeSearchId) {
+        sendResultsPartialAck(identity);
+        break;
+      }
+      if (tab.activeSearchId === undefined || msg.searchId > tab.activeSearchId) {
+        stopOlderSearchStates(msg.searchId);
+        discardPendingAppend(true);
+        latestSearchId = Math.max(latestSearchId, msg.searchId);
+        tab.activeSearchId = msg.searchId;
+        tab.completedSearchId = undefined;
+        tab.results = undefined;
+        tab.selectedIndex = -1;
+        tab.streamBatchCount = 0;
+        tab.searching = true;
+      }
+
+      if (!tab.results) {
+        tab.results = {
+          hits: [],
+          hitCount: 0,
+          fileCount: 0,
+          elapsedMs: 0,
+          query: msg.query ?? tab.query,
+          partialIndex: Boolean(msg.partialIndex),
+        };
+      }
+      const startIndex = tab.results.hits.length;
+
+      if (Array.isArray(msg.hits) && msg.hits.length > 0) {
+        tab.results.hits.push(...msg.hits);
+      }
+      tab.results.hitCount = msg.hitCount ?? tab.results.hits.length;
+      tab.results.fileCount = msg.fileCount ?? tab.results.fileCount;
+      tab.results.elapsedMs = msg.elapsedMs ?? tab.results.elapsedMs;
+      tab.results.partialIndex = Boolean(msg.partialIndex);
+      if (typeof msg.query === 'string') {
+        tab.results.query = msg.query;
+      }
+      if (msg.done) {
+        tab.searching = false;
+        tab.completedSearchId = msg.searchId;
+      }
+
+      if (tab.id !== activeTabId || document.visibilityState !== 'visible') {
+        tab.needsRender = true;
+        sendResultsPartialAck(identity);
+        break;
+      }
+
+      profileMarkWebview('webview_resultsPartial', {
+        hits: Array.isArray(msg.hits) ? msg.hits.length : 0,
+        done: Boolean(msg.done),
+        hitCount: msg.hitCount,
+      }, msg.searchId);
+
+      if (Array.isArray(msg.hits) && msg.hits.length > 0) {
+        if (startIndex === 0) {
+          const appendStart = performance.now();
+          initResultsTable(tab);
+          appendResultRows(tab, msg.hits, startIndex, Boolean(msg.plainFirstBatch));
+          tab.streamBatchCount = (tab.streamBatchCount ?? 0) + 1;
+          profileMarkWebview('webview_append_rows', {
+            hits: msg.hits.length,
+            ms: Math.round(performance.now() - appendStart),
+          }, msg.searchId);
+          if (profileFirstResultsSearchId !== msg.searchId) {
+            profileFirstResultsSearchId = msg.searchId;
+            profileMarkWebview('webview_first_resultsPartial', {
+              hits: msg.hits.length,
+              done: Boolean(msg.done),
+              hitCount: msg.hitCount,
+            }, msg.searchId);
+          }
+          sendResultsPartialAck(identity);
+        } else {
+          schedulePendingAppend(msg.hits, startIndex, false, tab, identity);
+        }
+      } else {
+        sendResultsPartialAck(identity);
+      }
+
+      if (msg.done) {
+        flushPendingAppendsNow();
+        if (tab.results.hitCount === 0) {
+          resultsEl.innerHTML = '<div class="empty">No results found</div>';
+          setFinalResultStatus(tab.results);
+        } else {
+          reorderRenderedRows(tab);
+          setFinalResultStatus(tab.results);
+        }
+      } else if (tab.results.hitCount > 0) {
+        if ((tab.streamBatchCount ?? 0) <= 1) {
+          setSearchingStatus(tab.results.hitCount);
+        } else {
+          setUpdatingStatus(tab.results.hits.length, tab.results.hitCount);
+        }
+      } else {
+        setSearchingStatus();
+      }
+      break;
+    }
+    case 'resultsHighlightPatch': {
+      if (!isMessageId(msg.searchId) || !Array.isArray(msg.highlighted)) {
+        break;
+      }
+      const tab = resolveMessageTab(msg.tabId);
+      if (!tab?.results || tab.activeSearchId !== msg.searchId) {
+        break;
+      }
+      const startIndex = Number.isInteger(msg.startIndex) ? msg.startIndex : 0;
+      for (let i = 0; i < msg.highlighted.length; i++) {
+        const hitIndex = startIndex + i;
+        const hit = tab.results.hits[hitIndex];
+        if (!hit) {
+          continue;
+        }
+        hit.highlighted = msg.highlighted[i];
+        if (tab.id === activeTabId && document.visibilityState === 'visible') {
+          const row = resultsEl.querySelector(`tr.hit-row[data-hit-index="${hitIndex}"]`);
+          const code = row?.querySelector('.hit-line') as HTMLElement | null;
+          if (code) {
+            code.textContent = '';
+            renderHighlightedLine(code, hit);
+          }
+        }
+      }
+      break;
+    }
+    case 'searchFailed': {
+      if (!isMessageId(msg.searchId)) {
+        break;
+      }
+      const tab = resolveMessageTab(msg.tabId);
+      if (!tab || tab.activeSearchId !== msg.searchId) {
+        break;
+      }
+      if (pendingAppend?.searchId === msg.searchId) {
+        discardPendingAppend(true);
+      }
+      tab.searching = false;
+      tab.completedSearchId = msg.searchId;
+      if (tab.id === activeTabId) {
+        statusHits.textContent = `Search failed: ${String(msg.message ?? 'Unknown error')}`;
+        if (!tab.results?.hits.length) {
+          const error = document.createElement('div');
+          error.className = 'empty';
+          error.textContent = 'Search failed';
+          resultsEl.innerHTML = '';
+          resultsEl.appendChild(error);
         }
       }
       break;
@@ -1047,6 +1591,25 @@ document.addEventListener('keydown', (e) => {
   }
 });
 resultsEl.addEventListener('scroll', () => hideResultContextMenu(), true);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') {
+    discardPendingAppend(true);
+    return;
+  }
+  const tab = getActiveTab();
+  if (!tab?.needsRender || !tab.results) {
+    return;
+  }
+  tab.needsRender = false;
+  renderResults(tab.results, tab.selectedIndex, tab);
+  if (tab.searching) {
+    if (tab.results.hitCount > 0) {
+      setUpdatingStatus(tab.results.hits.length, tab.results.hitCount);
+    } else {
+      setSearchingStatus();
+    }
+  }
+});
 
 ensureDefaultTab();
 renderTabs();

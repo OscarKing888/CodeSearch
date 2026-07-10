@@ -84,15 +84,22 @@ function fallbackHighlight(line: string, ext: string): HighlightToken[] {
   return tokens.length > 0 ? tokens : [{ text: line }];
 }
 
+export function highlightHitsSync(
+  hits: Array<{ lineText: string; path: string; matchStart: number; matchEnd: number }>,
+  reg: unknown
+): Array<{ tokens: HighlightToken[]; matchStart: number; matchEnd: number }> {
+  const results = [];
+  for (const hit of hits) {
+    const ext = path.extname(hit.path).replace(/^\./, '');
+    const tokens = fallbackHighlight(hit.lineText, ext);
+    results.push({ tokens, matchStart: hit.matchStart, matchEnd: hit.matchEnd });
+  }
+  return results;
+}
+
 export async function highlightHits(
   hits: Array<{ lineText: string; path: string; matchStart: number; matchEnd: number }>,
   reg: unknown
 ): Promise<Array<{ tokens: HighlightToken[]; matchStart: number; matchEnd: number }>> {
-  const results = [];
-  for (const hit of hits) {
-    const ext = path.extname(hit.path).replace(/^\./, '');
-    const tokens = await highlightLine(hit.lineText, ext, reg);
-    results.push({ tokens, matchStart: hit.matchStart, matchEnd: hit.matchEnd });
-  }
-  return results;
+  return highlightHitsSync(hits, reg);
 }

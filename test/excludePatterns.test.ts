@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  getIndexingMatcher,
   isExcludedDir,
   isExcludedFile,
   isPathIgnored,
@@ -78,6 +79,30 @@ function testMergeIndexingSettings(): void {
   assert.ok(merged.excludeGlobs.includes('**/vendor/**'));
 }
 
+function testCompiledMatcherReuseAndSemantics(): void {
+  const settings = {
+    ...DEFAULT_INDEXING_SETTINGS,
+    excludeDirNames: ['Intermediate', 'Derived*'],
+    excludeFileNames: ['*.pdb', 'package-lock.json'],
+    excludeGlobs: ['**/vendor/**'],
+    includeGlobs: ['**/*.cpp', '**/*.h'],
+  };
+  const first = getIndexingMatcher(settings);
+  const second = getIndexingMatcher(settings);
+
+  assert.strictEqual(first, second, 'the same settings object should compile once');
+  assert.strictEqual(first.isExcludedDir('DerivedDataCache'), true);
+  assert.strictEqual(first.isExcludedFile('C:\\proj\\src\\symbols.pdb'), true);
+  assert.strictEqual(first.isPathIgnored('C:\\proj\\vendor\\lib.cpp'), true);
+  assert.strictEqual(first.matchesIncludeGlob('C:\\proj\\src\\Actor.cpp'), true);
+  assert.strictEqual(first.matchesIncludeGlob('C:\\proj\\src\\Actor.ts'), false);
+
+  if (process.platform === 'win32') {
+    assert.strictEqual(first.isExcludedDir('intermediate'), true);
+    assert.strictEqual(first.isExcludedFile('C:\\proj\\PACKAGE-LOCK.JSON'), true);
+  }
+}
+
 function testParsePatternLines(): void {
   const patterns = parsePatternLines('# comment\nIntermediate\n\n*.pdb\n');
   assert.deepStrictEqual(patterns, ['Intermediate', '*.pdb']);
@@ -118,6 +143,7 @@ async function main(): Promise<void> {
   testIsExcludedFile();
   testIsPathIgnored();
   testMergeIndexingSettings();
+  testCompiledMatcherReuseAndSemantics();
   testParsePatternLines();
   await testWalkDirectorySkipsExcluded();
   console.log('excludePatterns tests passed');

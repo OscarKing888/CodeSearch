@@ -22,6 +22,12 @@ import {
   FileCandidate,
   rankCounterparts,
 } from '../pairing/headerSourcePairing';
+import {
+  finalizeTokenSuggestions,
+  TOKEN_AUTOCOMPLETE_INDEX,
+  TOKEN_AUTOCOMPLETE_INDEX_SQL,
+  TOKEN_SUGGESTION_CANDIDATE_LIMIT,
+} from './tokenSuggestions';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS files (
@@ -46,6 +52,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+${TOKEN_AUTOCOMPLETE_INDEX_SQL}
 `;
 const BATCH_SIZE = 100;
 
@@ -59,6 +66,7 @@ export class IndexService extends EventEmitter {
 
   private watcher = new FileWatcher();
   private paused = false;
+  private pauseCount = 0;
   private indexing = false;
   private status: IndexStatus = 'idle';
   private queued = 0;
@@ -74,6 +82,7 @@ export class IndexService extends EventEmitter {
   private insertFtsStmt: SqliteStatement | undefined;
   private getFileMtimeStmt: SqliteStatement | undefined;
   private upsertTokenStmt: SqliteStatement | undefined;
+  private tokenSuggestionsStmt: SqliteStatement | undefined;
   private perIndexExcludes: PerIndexExcludes | undefined;
 
   constructor(
@@ -125,7 +134,22 @@ export class IndexService extends EventEmitter {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = NORMAL');
     this.db.exec(SCHEMA);
+    this.ensureTokenAutocompleteIndex();
     this.prepareStatements();
+  }
+
+  private ensureTokenAutocompleteIndex(): void {
+    if (!this.db || this.readOnly) {
+      return;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT 1 AS ok FROM sqlite_master WHERE type = 'index' AND name = ?`
+      )
+      .get(TOKEN_AUTOCOMPLETE_INDEX) as { ok: number } | undefined;
+    if (!row) {
+      this.db.exec(TOKEN_AUTOCOMPLETE_INDEX_SQL);
+    }
   }
 
   private prepareStatements(): void {
@@ -149,6 +173,12 @@ export class IndexService extends EventEmitter {
     this.upsertTokenStmt = this.db.prepare(`
       INSERT INTO tokens (token, freq) VALUES (?, 1)
       ON CONFLICT(token) DO UPDATE SET freq = freq + 1
+    `);
+    this.tokenSuggestionsStmt = this.db.prepare(`
+      SELECT token, freq FROM tokens
+      WHERE token LIKE ? COLLATE NOCASE
+      ORDER BY freq DESC
+      LIMIT ?
     `);
   }
 
@@ -185,11 +215,22 @@ export class IndexService extends EventEmitter {
   }
 
   pause(): void {
-    this.paused = true;
+    this.pauseCount++;
+    if (this.pauseCount === 1) {
+      this.paused = true;
+      this.watcher.pause();
+    }
   }
 
   resume(): void {
-    this.paused = false;
+    if (this.pauseCount === 0) {
+      return;
+    }
+    this.pauseCount--;
+    if (this.pauseCount === 0) {
+      this.paused = false;
+      this.watcher.resume();
+    }
   }
 
   async startIndexing(forceAll = false): Promise<void> {
@@ -269,9 +310,17 @@ export class IndexService extends EventEmitter {
 
     this.activeThreadCount = 1;
 
+    try {
+      // Do not advertise an idle index until the watcher is registered. On
+      // VS Code/Cursor this uses the editor file service instead of walking
+      // the workspace again in the extension host.
+      this.startWatcher(config);
+    } catch (error) {
+      this.indexing = false;
+      throw error;
+    }
     this.setStatus('upToDate');
     this.indexing = false;
-    this.startWatcher();
     this.emit('progress', this.getProgress());
   }
 
@@ -311,11 +360,13 @@ export class IndexService extends EventEmitter {
     }
   }
 
-  async indexSingleFile(filePath: string): Promise<void> {
+  async indexSingleFile(
+    filePath: string,
+    config: IndexingSettings = this.getEffectiveSettings()
+  ): Promise<void> {
     if (this.readOnly) {
       return;
     }
-    const config = this.getEffectiveSettings();
     try {
       const stat = await fs.promises.stat(filePath);
       if (!shouldIndexFile(filePath, config, stat.size)) {
@@ -354,23 +405,26 @@ export class IndexService extends EventEmitter {
     }
   }
 
-  private startWatcher(): void {
+  private startWatcher(config: IndexingSettings = this.getEffectiveSettings()): void {
     if (this.readOnly) {
       return;
     }
-    const config = this.getEffectiveSettings();
     this.watcher.start(this.rootDirs, config, (filePath, event) => {
-      void this.handleFileChange(filePath, event);
+      return this.handleFileChange(filePath, event, config);
     });
   }
 
-  private async handleFileChange(filePath: string, event: 'add' | 'change' | 'unlink'): Promise<void> {
+  private async handleFileChange(
+    filePath: string,
+    event: 'add' | 'change' | 'unlink',
+    config: IndexingSettings
+  ): Promise<void> {
     if (event === 'unlink') {
       this.removeFile(filePath);
       this.emit('progress', this.getProgress());
       return;
     }
-    await this.indexSingleFile(filePath);
+    await this.indexSingleFile(filePath, config);
   }
 
   async refresh(forceAll = false): Promise<void> {
@@ -429,15 +483,14 @@ export class IndexService extends EventEmitter {
   }
 
   getTokenSuggestions(prefix: string, limit = 20): Array<{ token: string; freq: number }> {
-    if (!this.db || !prefix || prefix.length < 2) {
+    if (!this.db || !this.tokenSuggestionsStmt || !prefix || prefix.length < 2) {
       return [];
     }
-    const pattern = `${prefix}%`;
-    return this.db
-      .prepare(
-        `SELECT token, freq FROM tokens WHERE token LIKE ? COLLATE NOCASE ORDER BY LENGTH(token) ASC, freq DESC LIMIT ?`
-      )
-      .all(pattern, limit) as Array<{ token: string; freq: number }>;
+    const candidates = this.tokenSuggestionsStmt.all(
+      `${prefix}%`,
+      TOKEN_SUGGESTION_CANDIDATE_LIMIT
+    ) as Array<{ token: string; freq: number }>;
+    return finalizeTokenSuggestions(candidates, limit);
   }
 
   dispose(): void {

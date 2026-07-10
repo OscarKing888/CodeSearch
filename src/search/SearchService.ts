@@ -10,7 +10,23 @@ import {
 import { findLooseHits } from './LooseSearch';
 import { fuzzyMatch } from './FuzzyMatch';
 import { findWildcardHits } from './WildcardMatcher';
-import { ParsedQuery, SearchHit, SearchOptions, SearchResult } from '../types';
+import { ParsedQuery, SearchHit, SearchOptions, SearchResult, SearchStreamBatch } from '../types';
+import {
+  HitStreamBuffer,
+  makeStreamBatch,
+  StreamYieldThrottle,
+} from './searchStreamBuffer';
+import { profileMark } from '../utils/searchProfile';
+
+type CandidateRow = {
+  path: string;
+  content: string;
+  ext: string;
+  dir: string;
+  mtime: number;
+};
+
+type CandidateQuery = { kind: 'stmt'; sql: string; params: (string | number)[] };
 
 export class SearchService {
   constructor(private indexService: IndexService) {}
@@ -62,6 +78,335 @@ export class SearchService {
       };
     } finally {
       this.indexService.resume();
+    }
+  }
+
+  async *searchStreaming(
+    queryText: string,
+    options: SearchOptions
+  ): AsyncGenerator<SearchStreamBatch> {
+    const start = Date.now();
+    const db = this.indexService.getDatabase();
+    if (!db) {
+      yield emptyStreamBatch(queryText, start, true);
+      return;
+    }
+
+    const parsed = parseQuery(queryText, options.phraseSearch, options.looseGap);
+    const partialIndex = this.indexService.isPartialIndex();
+
+    if (options.loose && !parsed.loose) {
+      parsed.loose = true;
+      parsed.looseGap = options.looseGap;
+    }
+
+    this.indexService.pause();
+
+    try {
+      if (parsed.filterOnly) {
+        profileMark('search_streaming_start', { path: 'filterOnly' });
+        yield* this.filterOnlySearchStreaming(db, parsed, options, start, partialIndex);
+        return;
+      }
+
+      if (parsed.terms.length === 0) {
+        profileMark('search_streaming_start', { path: 'empty' });
+        yield emptyStreamBatch(queryText, start, partialIndex);
+        return;
+      }
+
+      if (parsed.multiWildcard && parsed.terms.length === 1) {
+        profileMark('search_streaming_start', { path: 'wildcard' });
+        yield* this.wildcardSearchStreaming(db, parsed, options, start, partialIndex);
+        return;
+      }
+
+      if (parsed.loose) {
+        profileMark('search_streaming_start', { path: 'loose' });
+        yield* this.looseSearchStreaming(db, parsed, options, start, partialIndex);
+        return;
+      }
+
+      profileMark('search_streaming_start', { path: 'standard' });
+      yield* this.standardSearchStreaming(db, parsed, options, start, partialIndex);
+    } finally {
+      profileMark('search_streaming_done');
+      this.indexService.resume();
+    }
+  }
+
+  private makeProfileStreamBatch(
+    hits: SearchHit[],
+    done: boolean,
+    buffer: HitStreamBuffer,
+    start: number,
+    query: string,
+    partialIndex: boolean
+  ): SearchStreamBatch {
+    const batch = makeStreamBatch(hits, done, buffer, start, query, partialIndex);
+    profileMark('search_batch_yield', {
+      batchHits: batch.hits.length,
+      hitCount: batch.hitCount,
+      fileCount: batch.fileCount,
+      done: batch.done,
+    });
+    return batch;
+  }
+
+  private async *standardSearchStreaming(
+    db: SqliteDatabase,
+    parsed: ParsedQuery,
+    options: SearchOptions,
+    start: number,
+    partialIndex: boolean
+  ): AsyncGenerator<SearchStreamBatch> {
+    const ftsQuery = buildFtsMatch(parsed.terms, parsed.phrase);
+    if (!ftsQuery) {
+      yield emptyStreamBatch(parsed.raw, start, partialIndex);
+      return;
+    }
+
+    yield* this.executeFtsSearchStreaming(db, ftsQuery, parsed, options, start, partialIndex);
+  }
+
+  private async *looseSearchStreaming(
+    db: SqliteDatabase,
+    parsed: ParsedQuery,
+    options: SearchOptions,
+    start: number,
+    partialIndex: boolean
+  ): AsyncGenerator<SearchStreamBatch> {
+    const yieldThrottle = new StreamYieldThrottle();
+    const looseTerms = parsed.terms.flatMap((t) =>
+      parsed.phrase ? t.split(/\s+/).filter(Boolean) : [t]
+    );
+    const ftsQuery = buildFtsMatch(looseTerms, false, true);
+    const buffer = new HitStreamBuffer();
+
+    for await (const row of this.iterateCandidateRows(db, ftsQuery, parsed, options)) {
+      if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
+        continue;
+      }
+
+      const looseHits = findLooseHits(
+        row.content,
+        looseTerms,
+        parsed.looseGap,
+        options.caseSensitive,
+        options.fuzzy
+      );
+
+      for (const lh of looseHits) {
+        const batch = buffer.add({
+          path: row.path,
+          line: lh.line,
+          column: lh.column,
+          lineText: lh.lineText,
+          contextBefore: this.contextBefore(row.content, lh.line, options.contextLines),
+          contextAfter: this.contextAfter(row.content, lh.line, options.contextLines),
+          matchStart: lh.matchStart,
+          matchEnd: lh.matchEnd,
+        });
+        if (batch) {
+          yield this.makeProfileStreamBatch(batch, false, buffer, start, parsed.raw, partialIndex);
+          await yieldThrottle.maybeYield();
+        }
+        if (buffer.getHitCount() >= options.maxResults) {
+          yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+          return;
+        }
+      }
+    }
+
+    yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+  }
+
+  private async *wildcardSearchStreaming(
+    db: SqliteDatabase,
+    parsed: ParsedQuery,
+    options: SearchOptions,
+    start: number,
+    partialIndex: boolean
+  ): AsyncGenerator<SearchStreamBatch> {
+    const yieldThrottle = new StreamYieldThrottle();
+    const pattern = parsed.terms[0];
+    const literalParts = pattern.split(/\s*\*(?::\d+)?\s*/).filter(Boolean);
+    const ftsQuery = buildFtsMatch(literalParts, false, true);
+    const buffer = new HitStreamBuffer();
+
+    for await (const row of this.iterateCandidateRows(
+      db,
+      ftsQuery || pattern.replace(/\*/g, ''),
+      parsed,
+      options
+    )) {
+      if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
+        continue;
+      }
+
+      const wcHits = findWildcardHits(row.content, pattern, options.caseSensitive);
+      for (const wh of wcHits) {
+        const batch = buffer.add({
+          path: row.path,
+          line: wh.line,
+          column: wh.column,
+          lineText: wh.lineText,
+          contextBefore: this.contextBefore(row.content, wh.line, options.contextLines),
+          contextAfter: this.contextAfter(row.content, wh.line, options.contextLines),
+          matchStart: wh.matchStart,
+          matchEnd: wh.matchEnd,
+        });
+        if (batch) {
+          yield this.makeProfileStreamBatch(batch, false, buffer, start, parsed.raw, partialIndex);
+          await yieldThrottle.maybeYield();
+        }
+        if (buffer.getHitCount() >= options.maxResults) {
+          yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+          return;
+        }
+      }
+    }
+
+    yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+  }
+
+  private async *filterOnlySearchStreaming(
+    db: SqliteDatabase,
+    parsed: ParsedQuery,
+    options: SearchOptions,
+    start: number,
+    partialIndex: boolean
+  ): AsyncGenerator<SearchStreamBatch> {
+    const yieldThrottle = new StreamYieldThrottle();
+    const now = Date.now();
+    let sql = `SELECT path, content, ext, dir, mtime FROM files WHERE 1=1`;
+    const params: (string | number)[] = [];
+    sql += this.buildMtimeFilter(parsed, now, params);
+
+    const rows = db.prepare(sql).all(...params) as Array<{
+      path: string;
+      content: string;
+      ext: string;
+      dir: string;
+      mtime: number;
+    }>;
+
+    const buffer = new HitStreamBuffer();
+    const seenFiles = new Set<string>();
+
+    for (const row of rows) {
+      if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
+        continue;
+      }
+      if (seenFiles.has(row.path)) {
+        continue;
+      }
+      seenFiles.add(row.path);
+
+      const lines = row.content.split(/\r?\n/);
+      const lineText = lines[0] ?? '';
+      const batch = buffer.add({
+        path: row.path,
+        line: 1,
+        column: 1,
+        lineText,
+        contextBefore: [],
+        contextAfter: lines.slice(1, 1 + options.contextLines),
+        matchStart: 0,
+        matchEnd: 0,
+      });
+      if (batch) {
+        yield this.makeProfileStreamBatch(batch, false, buffer, start, parsed.raw, partialIndex);
+        await yieldThrottle.maybeYield();
+      }
+      if (buffer.getHitCount() >= options.maxResults) {
+        yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+        return;
+      }
+    }
+
+    yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+  }
+
+  private async *executeFtsSearchStreaming(
+    db: SqliteDatabase,
+    ftsQuery: string,
+    parsed: ParsedQuery,
+    options: SearchOptions,
+    start: number,
+    partialIndex: boolean
+  ): AsyncGenerator<SearchStreamBatch> {
+    const yieldThrottle = new StreamYieldThrottle();
+    const buffer = new HitStreamBuffer();
+    const searchTerms = parsed.terms.flatMap((t) =>
+      parsed.phrase && !parsed.multiWildcard ? [t] : t.split(/\s+/).filter(Boolean)
+    );
+
+    for await (const row of this.iterateCandidateRows(db, ftsQuery, parsed, options)) {
+      if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
+        continue;
+      }
+
+      const fileHits = this.findHitsInContent(
+        row.path,
+        row.content,
+        searchTerms,
+        parsed.phrase && !parsed.multiWildcard,
+        options.caseSensitive,
+        options.contextLines,
+        options.fuzzy
+      );
+
+      for (const hit of fileHits) {
+        const batch = buffer.add(hit);
+        if (batch) {
+          yield this.makeProfileStreamBatch(batch, false, buffer, start, parsed.raw, partialIndex);
+          await yieldThrottle.maybeYield();
+        }
+        if (buffer.getHitCount() >= options.maxResults) {
+          yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+          return;
+        }
+      }
+    }
+
+    if (options.fuzzy && buffer.getHitCount() < options.maxResults) {
+      const primaryKeys = buffer.getHitKeys();
+      const fuzzyHits = this.fuzzyContentSearch(db, parsed, {
+        ...options,
+        maxResults: options.maxResults - buffer.getHitCount(),
+      });
+      for (const hit of fuzzyHits) {
+        const key = `${hit.path}:${hit.line}:${hit.matchStart}`;
+        if (primaryKeys.has(key)) {
+          continue;
+        }
+        primaryKeys.add(key);
+        const batch = buffer.add(hit);
+        if (batch) {
+          yield this.makeProfileStreamBatch(batch, false, buffer, start, parsed.raw, partialIndex);
+          await yieldThrottle.maybeYield();
+        }
+        if (buffer.getHitCount() >= options.maxResults) {
+          break;
+        }
+      }
+    }
+
+    yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+  }
+
+  private async *finalizeStreamBatch(
+    buffer: HitStreamBuffer,
+    start: number,
+    query: string,
+    partialIndex: boolean,
+    yieldThrottle: StreamYieldThrottle = new StreamYieldThrottle()
+  ): AsyncGenerator<SearchStreamBatch> {
+    const tail = buffer.flush();
+    yield this.makeProfileStreamBatch(tail, true, buffer, start, query, partialIndex);
+    if (tail.length > 0) {
+      await yieldThrottle.maybeYield();
     }
   }
 
@@ -211,12 +556,11 @@ export class SearchService {
     return hits;
   }
 
-  private fetchCandidateRows(
-    db: SqliteDatabase,
+  private buildCandidateQuery(
     ftsQuery: string,
     parsed: ParsedQuery,
     options: SearchOptions
-  ): Array<{ path: string; content: string; ext: string; dir: string; mtime: number }> {
+  ): CandidateQuery {
     const now = Date.now();
 
     if (!ftsQuery) {
@@ -225,13 +569,7 @@ export class SearchService {
       sql += this.buildMtimeFilter(parsed, now, params);
       sql += ` LIMIT ?`;
       params.push(options.maxResults * 10);
-      return db.prepare(sql).all(...params) as Array<{
-        path: string;
-        content: string;
-        ext: string;
-        dir: string;
-        mtime: number;
-      }>;
+      return { kind: 'stmt', sql, params };
     }
 
     let sql = `
@@ -244,26 +582,68 @@ export class SearchService {
     sql += this.buildMtimeFilter(parsed, now, params, 'f');
     sql += ` LIMIT ?`;
     params.push(options.maxResults * 10);
+    return { kind: 'stmt', sql, params };
+  }
+
+  private fetchCandidateRows(
+    db: SqliteDatabase,
+    ftsQuery: string,
+    parsed: ParsedQuery,
+    options: SearchOptions
+  ): CandidateRow[] {
+    const query = this.buildCandidateQuery(ftsQuery, parsed, options);
 
     try {
-      return db.prepare(sql).all(...params) as Array<{
-        path: string;
-        content: string;
-        ext: string;
-        dir: string;
-        mtime: number;
-      }>;
+      return db.prepare(query.sql).all(...query.params) as CandidateRow[];
     } catch {
       const pattern = `%${parsed.terms[0]?.replace(/\*/g, '%') ?? ''}%`;
       return db
         .prepare(`SELECT path, content, ext, dir, mtime FROM files WHERE content LIKE ? LIMIT ?`)
-        .all(pattern, options.maxResults * 5) as Array<{
-          path: string;
-          content: string;
-          ext: string;
-          dir: string;
-          mtime: number;
-        }>;
+        .all(pattern, options.maxResults * 5) as CandidateRow[];
+    }
+  }
+
+  private async *iterateCandidateRows(
+    db: SqliteDatabase,
+    ftsQuery: string,
+    parsed: ParsedQuery,
+    options: SearchOptions
+  ): AsyncGenerator<CandidateRow> {
+    const yieldThrottle = new StreamYieldThrottle();
+    const query = this.buildCandidateQuery(ftsQuery, parsed, options);
+
+    const iterateRows = async function* (
+      sql: string,
+      params: (string | number)[]
+    ): AsyncGenerator<CandidateRow> {
+      const stmt = db.prepare(sql);
+      let rowIndex = 0;
+      for (const row of stmt.iterate(...params)) {
+        rowIndex++;
+        if (rowIndex === 1) {
+          profileMark('search_iterate_first_row', {
+            rowIndex,
+            path: (row as CandidateRow).path,
+          });
+        } else if (rowIndex % 100 === 0) {
+          profileMark('search_iterate_row', {
+            rowIndex,
+            path: (row as CandidateRow).path,
+          });
+        }
+        yield row as CandidateRow;
+        await yieldThrottle.maybeYield();
+      }
+    };
+
+    try {
+      yield* iterateRows(query.sql, query.params);
+    } catch {
+      const pattern = `%${parsed.terms[0]?.replace(/\*/g, '%') ?? ''}%`;
+      yield* iterateRows(
+        `SELECT path, content, ext, dir, mtime FROM files WHERE content LIKE ? LIMIT ?`,
+        [pattern, options.maxResults * 5]
+      );
     }
   }
 
@@ -492,6 +872,18 @@ export class SearchService {
     }
     return sql;
   }
+}
+
+function emptyStreamBatch(query: string, start: number, partialIndex: boolean): SearchStreamBatch {
+  return {
+    hits: [],
+    hitCount: 0,
+    fileCount: 0,
+    elapsedMs: Date.now() - start,
+    query,
+    partialIndex,
+    done: true,
+  };
 }
 
 function emptyResult(query: string, start: number, partialIndex: boolean): SearchResult {

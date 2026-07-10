@@ -1,7 +1,12 @@
 import { IndexManager } from '../index/IndexManager';
 import { isBinaryExtension } from '../index/FileScanner';
 import { SearchService, getRelativePath } from './SearchService';
-import { SearchHit, SearchOptions, SearchResult } from '../types';
+import {
+  FIRST_BATCH_SIZE,
+  STREAM_BATCH_SIZE,
+  StreamYieldThrottle,
+} from './searchStreamBuffer';
+import { SearchHit, SearchOptions, SearchResult, SearchStreamBatch } from '../types';
 
 export interface ExtendedSearchHit extends SearchHit {
   indexId: string;
@@ -10,6 +15,10 @@ export interface ExtendedSearchHit extends SearchHit {
 }
 
 export interface MultiSearchResult extends SearchResult {
+  hits: ExtendedSearchHit[];
+}
+
+export interface MultiSearchStreamBatch extends SearchStreamBatch {
   hits: ExtendedSearchHit[];
 }
 
@@ -92,6 +101,166 @@ export class MultiIndexSearchService {
       query: queryText,
       partialIndex: partial || this.indexManager.isPartialIndex(),
     };
+  }
+
+  async *searchStreaming(
+    queryText: string,
+    options: SearchOptions
+  ): AsyncGenerator<MultiSearchStreamBatch> {
+    const start = Date.now();
+    const services = this.indexManager.getAllServices();
+
+    if (services.length === 0) {
+      yield {
+        hits: [],
+        hitCount: 0,
+        fileCount: 0,
+        elapsedMs: 0,
+        query: queryText,
+        partialIndex: true,
+        done: true,
+      };
+      return;
+    }
+
+    const perIndexLimit = Math.ceil(options.maxResults / services.length);
+
+    if (services.length === 1) {
+      const indexService = services[0];
+      const searcher = this.searchers.get(indexService.id) ?? new SearchService(indexService);
+      const yieldThrottle = new StreamYieldThrottle();
+      const fileSet = new Set<string>();
+      let hitCount = 0;
+
+      for await (const batch of searcher.searchStreaming(queryText, {
+        ...options,
+        maxResults: perIndexLimit,
+      })) {
+        const hits: ExtendedSearchHit[] = [];
+        for (const hit of batch.hits) {
+          const localPath = this.indexManager.mapHitPath(indexService.id, hit.path);
+          if (isBinaryExtension(localPath)) {
+            continue;
+          }
+          hits.push({
+            ...hit,
+            path: hit.path,
+            localPath,
+            indexId: indexService.id,
+            indexName: indexService.name,
+          });
+          fileSet.add(localPath);
+          hitCount++;
+        }
+
+        yield {
+          ...batch,
+          hits,
+          hitCount,
+          fileCount: fileSet.size,
+        };
+        await yieldThrottle.maybeYield();
+      }
+      return;
+    }
+
+    const seenKeys = new Set<string>();
+    const fileSet = new Set<string>();
+    let pending: ExtendedSearchHit[] = [];
+    let hitCount = 0;
+    let partial = false;
+    let firstBatchEmitted = false;
+    const yieldThrottle = new StreamYieldThrottle();
+
+    const batchThreshold = (): number =>
+      firstBatchEmitted ? STREAM_BATCH_SIZE : FIRST_BATCH_SIZE;
+
+    const emitBatch = (done: boolean): MultiSearchStreamBatch | null => {
+      if (pending.length === 0 && !done) {
+        return null;
+      }
+      const hits = pending;
+      pending = [];
+      if (hits.length > 0) {
+        firstBatchEmitted = true;
+      }
+      return {
+        hits,
+        hitCount,
+        fileCount: fileSet.size,
+        elapsedMs: Date.now() - start,
+        query: queryText,
+        partialIndex: partial || this.indexManager.isPartialIndex(),
+        done,
+      };
+    };
+
+    for (const indexService of services) {
+      const searcher = this.searchers.get(indexService.id) ?? new SearchService(indexService);
+      for await (const batch of searcher.searchStreaming(queryText, {
+        ...options,
+        maxResults: perIndexLimit,
+      })) {
+        partial = partial || batch.partialIndex;
+
+        for (const hit of batch.hits) {
+          if (hitCount >= options.maxResults) {
+            break;
+          }
+
+          const localPath = this.indexManager.mapHitPath(indexService.id, hit.path);
+          if (isBinaryExtension(localPath)) {
+            continue;
+          }
+          const key = `${localPath}:${hit.line}:${hit.matchStart}`;
+          if (seenKeys.has(key)) {
+            continue;
+          }
+          seenKeys.add(key);
+          fileSet.add(localPath);
+          hitCount++;
+
+          pending.push({
+            ...hit,
+            path: hit.path,
+            localPath,
+            indexId: indexService.id,
+            indexName: indexService.name,
+          });
+
+          if (pending.length >= batchThreshold()) {
+            const out = emitBatch(false);
+            if (out) {
+              yield out;
+              await yieldThrottle.maybeYield();
+            }
+          }
+        }
+
+        if (hitCount >= options.maxResults) {
+          break;
+        }
+      }
+
+      if (hitCount >= options.maxResults) {
+        break;
+      }
+    }
+
+    const tail = emitBatch(true);
+    if (tail) {
+      yield tail;
+    } else {
+      yield {
+        hits: [],
+        hitCount,
+        fileCount: fileSet.size,
+        elapsedMs: Date.now() - start,
+        query: queryText,
+        partialIndex: partial || this.indexManager.isPartialIndex(),
+        done: true,
+      };
+    }
   }
 }
 

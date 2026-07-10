@@ -6,6 +6,7 @@ import {
   confirmAndDelete,
   createStandaloneIndex,
   detachIndex,
+  formatIndexDisplayTitle,
   getIndexListPayload,
   pickMoveDestination,
   refreshAllIndexes,
@@ -164,7 +165,13 @@ export class IndexManagePanel {
         if (msg.id) {
           const meta = this.manager.getRegistry().getById(msg.id);
           if (meta) {
-            await this.afterMutation(await confirmAndDelete(this.manager, msg.id, meta.name));
+            await this.afterMutation(
+              await confirmAndDelete(
+                this.manager,
+                msg.id,
+                formatIndexDisplayTitle(meta.rootDirs, meta.name)
+              )
+            );
           }
         }
         break;
@@ -288,7 +295,7 @@ export class IndexManagePanel {
       gap: 8px;
       margin-bottom: 8px;
     }
-    .card-title { font-weight: 600; font-size: 13px; }
+    .card-title { font-weight: 600; font-size: 13px; word-break: break-all; }
     .badge {
       font-size: 10px;
       padding: 2px 6px;
@@ -297,6 +304,7 @@ export class IndexManagePanel {
       color: var(--vscode-badge-foreground);
     }
     .badge.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+    .badge.secondary { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
     .meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; word-break: break-all; }
     .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .rename-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }

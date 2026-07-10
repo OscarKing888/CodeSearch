@@ -13,5 +13,5 @@
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "src/ui/webview"]
+  "exclude": ["node_modules", "dist", "src/ui/webview", "src/ui/manage-webview"]
 }

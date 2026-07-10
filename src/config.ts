@@ -11,6 +11,7 @@ export interface SourceSearchConfig {
   maxFileSizeKB: number;
   fuzzySearchDefault: boolean;
   looseGapDefault: number;
+  profileSearch: boolean;
 }
 
 export function getConfig(): SourceSearchConfig {
@@ -26,6 +27,7 @@ export function getConfig(): SourceSearchConfig {
     maxFileSizeKB: cfg.get<number>('maxFileSizeKB', 2048),
     fuzzySearchDefault: cfg.get<boolean>('fuzzySearchDefault', false),
     looseGapDefault: cfg.get<number>('looseGapDefault', 10),
+    profileSearch: cfg.get<boolean>('profileSearch', false),
   };
 }
 
