@@ -4,6 +4,8 @@ VS Code 扩展，基于 SQLite FTS5 提供全文代码索引与即时搜索。
 
 ![Ace Code Search 截图](https://raw.githubusercontent.com/OscarKing888/CodeSearch/main/doc/AceCodeSearch.png)
 
+![Class Viewer 截图](https://raw.githubusercontent.com/OscarKing888/CodeSearch/main/doc/CodeSearchClassViewer.png)
+
 > **独立开发声明**
 >
 > 本插件在功能理念上参考了 [Entrian Source Search](https://entrian.com/source-search/) 等全文代码搜索工具的用户体验，但代码、架构与实现均为本项目独立设计与开发，未使用任何第三方源代码或专有资产，与 Entrian 及其产品无任何关联或授权关系。

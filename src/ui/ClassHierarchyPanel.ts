@@ -206,7 +206,19 @@ export class ClassHierarchyPanel {
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
     }
-    .header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: -14px -16px 0;
+      padding: 14px 16px 10px;
+      background: var(--vscode-editor-background);
+      border-bottom: 1px solid var(--vscode-panel-border, transparent);
+    }
     h1 { flex: 0 0 auto; margin: 0 8px 0 0; font-size: 1.25em; font-weight: 600; }
     .filter {
       flex: 1 1 220px;
