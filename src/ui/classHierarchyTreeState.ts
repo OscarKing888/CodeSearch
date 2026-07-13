@@ -3,6 +3,52 @@ export interface ClassHierarchyTreeNode {
   children: readonly string[];
 }
 
+export interface NamedClassHierarchyTreeNode extends ClassHierarchyTreeNode {
+  name: string;
+}
+
+/**
+ * Return direct name matches and every node that can reach one through child edges.
+ * Reverse edges keep the traversal iterative and naturally deduplicate DAGs/cycles.
+ */
+export function collectHierarchyFilterMatches(
+  nodeById: ReadonlyMap<string, NamedClassHierarchyTreeNode>,
+  filter: string
+): Set<string> {
+  const normalizedFilter = filter.trim().toLocaleLowerCase();
+  const parentsByChild = new Map<string, string[]>();
+  const visible = new Set<string>();
+  const pending: string[] = [];
+
+  for (const [id, node] of nodeById) {
+    if (node.name.toLocaleLowerCase().includes(normalizedFilter)) {
+      visible.add(id);
+      pending.push(id);
+    }
+    for (const childId of node.children) {
+      const parents = parentsByChild.get(childId);
+      if (parents) {
+        parents.push(id);
+      } else {
+        parentsByChild.set(childId, [id]);
+      }
+    }
+  }
+
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    for (const parentId of parentsByChild.get(id) ?? []) {
+      if (visible.has(parentId)) {
+        continue;
+      }
+      visible.add(parentId);
+      pending.push(parentId);
+    }
+  }
+
+  return visible;
+}
+
 /** Return every reachable child once, even when the hierarchy is a DAG or malformed cycle. */
 export function collectHierarchyDescendants(
   nodeById: ReadonlyMap<string, ClassHierarchyTreeNode>,
@@ -19,7 +65,9 @@ export function collectHierarchyDescendants(
     }
     visited.add(id);
     descendants.add(id);
-    pending.push(...(nodeById.get(id)?.children ?? []));
+    for (const childId of nodeById.get(id)?.children ?? []) {
+      pending.push(childId);
+    }
   }
 
   return descendants;
@@ -77,28 +125,17 @@ export function prioritizeHierarchyRoot(
   return [selectedRoot, ...roots.slice(0, index), ...roots.slice(index + 1)];
 }
 
-/** Prioritize the next selected-path child so a render budget cannot hide it. */
-export function prioritizeHierarchyChildren(
+/** Put the next selected-path child first without copying the whole ancestor path. */
+export function prioritizeHierarchyChild(
   children: readonly string[],
-  currentPath: readonly string[],
-  selectedPath: readonly string[] | undefined
+  selectedChild: string | undefined
 ): string[] {
-  if (!selectedPath || currentPath.length >= selectedPath.length) {
+  if (!selectedChild) {
     return [...children];
   }
-  for (let index = 0; index < currentPath.length; index++) {
-    if (currentPath[index] !== selectedPath[index]) {
-      return [...children];
-    }
-  }
-  const selectedChild = selectedPath[currentPath.length];
-  const childIndex = children.indexOf(selectedChild);
-  if (childIndex <= 0) {
+  const index = children.indexOf(selectedChild);
+  if (index <= 0) {
     return [...children];
   }
-  return [
-    selectedChild,
-    ...children.slice(0, childIndex),
-    ...children.slice(childIndex + 1),
-  ];
+  return [selectedChild, ...children.slice(0, index), ...children.slice(index + 1)];
 }

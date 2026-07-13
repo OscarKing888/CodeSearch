@@ -129,7 +129,9 @@ export class ClassHierarchyCacheManager extends EventEmitter {
     for (const service of this.indexManager.getAllServices()) {
       throwIfAborted(signal);
       const result = await this.readServiceDeclarations(service, signal);
-      combined.push(...result.declarations);
+      for (const declaration of result.declarations) {
+        combined.push(declaration);
+      }
       parsedFileCount += result.parsedFileCount;
       partial ||= result.partial;
       await yieldToEventLoop();
@@ -236,7 +238,9 @@ export class ClassHierarchyCacheManager extends EventEmitter {
         });
         if (page.sources.length > 0) {
           const parsed = await this.parsePage(page.sources);
-          parsedFiles.push(...parsed.files);
+          for (const file of parsed.files) {
+            parsedFiles.push(file);
+          }
           if (parsed.failedFileCount > 0) {
             retryNeeded = true;
           }
@@ -300,11 +304,14 @@ export class ClassHierarchyCacheManager extends EventEmitter {
       fallback = await this.parseReadonlyFallback(store, signal);
       this.readonlyFallbacks.set(service.id, fallback);
     }
+    const declarations = cached.slice();
+    if (fallback) {
+      for (const declaration of fallback.declarations) {
+        declarations.push(declaration);
+      }
+    }
     return {
-      declarations: tagDeclarations(
-        service.id,
-        fallback ? [...cached, ...fallback.declarations] : cached
-      ),
+      declarations: tagDeclarations(service.id, declarations),
       parsedFileCount: cachedFileCount + (fallback?.parsedFileCount ?? 0),
       partial: fallback ? !fallback.complete : pending || !capabilities.available,
     };
@@ -327,7 +334,9 @@ export class ClassHierarchyCacheManager extends EventEmitter {
       });
       const parsed = await this.parsePage(page.sources, signal);
       for (const file of parsed.files) {
-        declarations.push(...file.declarations);
+        for (const declaration of file.declarations) {
+          declarations.push(declaration);
+        }
       }
       parsedFileCount += parsed.files.length;
       complete &&= parsed.failedFileCount === 0;

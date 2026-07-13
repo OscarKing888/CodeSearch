@@ -9,6 +9,7 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Add hierarchy/context SVG toolbar icons, filter-clear selection reveal, and subclass expand/collapse actions in the class-row context menu.
 
 ### Fixed
+- Prevent `Maximum call stack size exceeded` in large class hierarchies by removing unbounded array-spread calls and using iterative filter/render graph traversal.
 - Move editor file watching out of the extension-host chokidar crawl, coalesce queued changes during searches, and prevent large Unreal Engine workspaces from starving search/UI work.
 - Persist search profiles from search start through success, cancellation, errors, or disposal, including incremental checkpoints and ACK wait timings.
 - Stop re-registering command IDs owned by C/C++ and clangd extensions.

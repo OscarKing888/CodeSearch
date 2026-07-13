@@ -1,7 +1,8 @@
 import {
   collapseAllSubclasses,
+  collectHierarchyFilterMatches,
   expandAllSubclasses,
-  prioritizeHierarchyChildren,
+  prioritizeHierarchyChild,
   prioritizeHierarchyRoot,
   revealHierarchyPath,
 } from '../classHierarchyTreeState';
@@ -29,6 +30,22 @@ interface ClassHierarchyModel {
   parsedFileCount: number;
   partialIndex: boolean;
 }
+
+interface HierarchyOccurrence {
+  id: string;
+  parent?: HierarchyOccurrence;
+  depth: number;
+}
+
+type RenderFrame =
+  | {
+      type: 'enter';
+      id: string;
+      parent: HTMLElement | DocumentFragment;
+      occurrenceParent?: HierarchyOccurrence;
+      selectedPrefix: boolean;
+    }
+  | { type: 'exit'; id: string };
 
 const vscode = acquireVsCodeApi();
 const MAX_RENDERED_NODES = 5000;
@@ -209,7 +226,9 @@ function render(): void {
   }
 
   const filter = normalizedFilter();
-  const matchMemo = new Map<string, boolean>();
+  const matchingBranchIds = filter
+    ? collectHierarchyFilterMatches(nodeById, filter)
+    : undefined;
   let renderedRoots = 0;
   const roots = revealSelectedAfterRender
     ? prioritizeHierarchyRoot(displayRoots, selectedOccurrence?.path)
@@ -219,10 +238,10 @@ function render(): void {
       renderTruncated = true;
       break;
     }
-    if (filter && !branchMatches(rootId, filter, new Set<string>(), matchMemo)) {
+    if (matchingBranchIds && !matchingBranchIds.has(rootId)) {
       continue;
     }
-    const item = renderNode(rootId, new Set<string>(), [], filter, matchMemo);
+    const item = renderNodeIterative(rootId, filter, matchingBranchIds);
     if (item) {
       treeElement.appendChild(item);
       renderedRoots += 1;
@@ -251,148 +270,199 @@ function render(): void {
   }
 }
 
-function renderNode(
+function renderNodeIterative(
   id: string,
-  ancestors: Set<string>,
-  ancestorPath: string[],
   filter: string,
-  matchMemo: Map<string, boolean>
+  matchingBranchIds: ReadonlySet<string> | undefined
 ): HTMLLIElement | undefined {
   if (renderNodeBudget <= 0) {
     renderTruncated = true;
     return undefined;
   }
-  const node = nodeById.get(id);
-  if (!node) {
-    return undefined;
-  }
-  renderNodeBudget--;
+  const holder = document.createDocumentFragment();
+  const activeAncestors = new Set<string>();
+  const selectedPath = selectedOccurrence?.path;
+  const frames: RenderFrame[] = [{
+    type: 'enter',
+    id,
+    parent: holder,
+    selectedPrefix: selectedPath?.[0] === id,
+  }];
 
-  const isCycle = ancestors.has(id);
-  const item = document.createElement('li');
-  const row = document.createElement('div');
-  row.className = 'node-row';
-  row.tabIndex = -1;
-  const occurrencePath = [...ancestorPath, id];
-  if (isSelectedOccurrence(id, occurrencePath)) {
-    row.classList.add('selected');
-    row.setAttribute('aria-selected', 'true');
-    selectedRow = row;
-  }
-  row.addEventListener('click', () => {
-    selectOccurrence(id, occurrencePath, row);
-  });
-  row.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    selectOccurrence(id, occurrencePath, row);
-    showTreeContextMenu(event.clientX, event.clientY, id);
-  });
-  item.appendChild(row);
+  while (frames.length > 0) {
+    const frame = frames.pop()!;
+    if (frame.type === 'exit') {
+      activeAncestors.delete(frame.id);
+      continue;
+    }
+    if (renderNodeBudget <= 0) {
+      renderTruncated = true;
+      break;
+    }
 
-  const matchingChildren = isCycle
-    ? []
-    : node.children.filter((childId) => !filter || branchMatches(childId, filter, new Set(ancestors).add(id), matchMemo));
-  const orderedChildren = revealSelectedAfterRender
-    ? prioritizeHierarchyChildren(
-        matchingChildren,
-        occurrencePath,
-        selectedOccurrence?.path
-      )
-    : matchingChildren;
-  const expandable = orderedChildren.length > 0;
-  if (expandable) {
-    const twistie = document.createElement('button');
-    twistie.type = 'button';
-    twistie.className = 'twistie';
-    twistie.textContent = collapsed.has(id) && !filter ? '▶' : '▼';
-    twistie.title = collapsed.has(id) && !filter ? 'Expand' : 'Collapse';
-    twistie.setAttribute('aria-label', `${twistie.title} ${node.name}`);
-    twistie.addEventListener('click', (event) => {
+    const node = nodeById.get(frame.id);
+    if (!node) {
+      continue;
+    }
+    renderNodeBudget--;
+
+    const isCycle = activeAncestors.has(frame.id);
+    const occurrence: HierarchyOccurrence = {
+      id: frame.id,
+      parent: frame.occurrenceParent,
+      depth: (frame.occurrenceParent?.depth ?? 0) + 1,
+    };
+    const item = document.createElement('li');
+    const row = document.createElement('div');
+    row.className = 'node-row';
+    row.tabIndex = -1;
+    if (isSelectedOccurrenceNode(occurrence)) {
+      row.classList.add('selected');
+      row.setAttribute('aria-selected', 'true');
+      selectedRow = row;
+    }
+    row.addEventListener('click', () => {
+      selectOccurrence(frame.id, occurrenceToPath(occurrence), row);
+    });
+    row.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
       event.stopPropagation();
-      if (collapsed.has(id)) {
-        collapsed.delete(id);
-      } else {
-        collapsed.add(id);
-      }
-      render();
+      selectOccurrence(frame.id, occurrenceToPath(occurrence), row);
+      showTreeContextMenu(event.clientX, event.clientY, frame.id);
     });
-    row.appendChild(twistie);
-  } else {
-    const spacer = document.createElement('span');
-    spacer.className = 'twistie-spacer';
-    row.appendChild(spacer);
-  }
+    item.appendChild(row);
+    frame.parent.appendChild(item);
 
-  const name = document.createElement('button');
-  name.type = 'button';
-  name.className = 'class-name';
-  name.textContent = node.name;
-  const canOpen = !node.external && Boolean(node.path);
-  if (node.external) {
-    name.classList.add('external');
-    name.title = 'External base class (not present in the index)';
-    name.disabled = true;
-  } else if (!canOpen) {
-    name.classList.add('unavailable');
-    name.title = 'Source location unavailable';
-    name.disabled = true;
-  } else {
-    name.title = `${node.path}:${node.line ?? 1}`;
-    name.addEventListener('click', () => {
-      selectOccurrence(id, occurrencePath, row);
-      vscode.postMessage({
-        type: 'openFile',
-        path: node.path,
-        line: node.line ?? 1,
-        column: node.column ?? 1,
+    const matchingChildren = isCycle
+      ? []
+      : node.children.filter((childId) =>
+          nodeById.has(childId) &&
+          (!matchingBranchIds || matchingBranchIds.has(childId))
+        );
+    const selectedChild = revealSelectedAfterRender && frame.selectedPrefix
+      ? selectedPath?.[occurrence.depth]
+      : undefined;
+    const orderedChildren = prioritizeHierarchyChild(matchingChildren, selectedChild);
+    const expandable = orderedChildren.length > 0;
+    if (expandable) {
+      const twistie = document.createElement('button');
+      twistie.type = 'button';
+      twistie.className = 'twistie';
+      twistie.textContent = collapsed.has(frame.id) && !filter ? '▶' : '▼';
+      twistie.title = collapsed.has(frame.id) && !filter ? 'Expand' : 'Collapse';
+      twistie.setAttribute('aria-label', `${twistie.title} ${node.name}`);
+      twistie.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (collapsed.has(frame.id)) {
+          collapsed.delete(frame.id);
+        } else {
+          collapsed.add(frame.id);
+        }
+        render();
       });
-    });
-  }
-  row.appendChild(name);
+      row.appendChild(twistie);
+    } else {
+      const spacer = document.createElement('span');
+      spacer.className = 'twistie-spacer';
+      row.appendChild(spacer);
+    }
 
-  if (node.kind) {
-    const kind = document.createElement('span');
-    kind.className = 'kind';
-    kind.textContent = node.kind;
-    row.appendChild(kind);
-  }
+    const name = document.createElement('button');
+    name.type = 'button';
+    name.className = 'class-name';
+    name.textContent = node.name;
+    const canOpen = !node.external && Boolean(node.path);
+    if (node.external) {
+      name.classList.add('external');
+      name.title = 'External base class (not present in the index)';
+      name.disabled = true;
+    } else if (!canOpen) {
+      name.classList.add('unavailable');
+      name.title = 'Source location unavailable';
+      name.disabled = true;
+    } else {
+      name.title = `${node.path}:${node.line ?? 1}`;
+      name.addEventListener('click', () => {
+        selectOccurrence(frame.id, occurrenceToPath(occurrence), row);
+        vscode.postMessage({
+          type: 'openFile',
+          path: node.path,
+          line: node.line ?? 1,
+          column: node.column ?? 1,
+        });
+      });
+    }
+    row.appendChild(name);
 
-  if (isCycle) {
-    const cycle = document.createElement('span');
-    cycle.className = 'cycle';
-    cycle.textContent = '↻ cycle';
-    row.appendChild(cycle);
-    return item;
-  }
+    if (node.kind) {
+      const kind = document.createElement('span');
+      kind.className = 'kind';
+      kind.textContent = node.kind;
+      row.appendChild(kind);
+    }
 
-  if (expandable && (!collapsed.has(id) || filter)) {
-    const children = document.createElement('ul');
-    const nextAncestors = new Set(ancestors);
-    nextAncestors.add(id);
-    for (const childId of orderedChildren) {
-      const child = renderNode(childId, nextAncestors, occurrencePath, filter, matchMemo);
-      if (child) {
-        children.appendChild(child);
+    if (isCycle) {
+      const cycle = document.createElement('span');
+      cycle.className = 'cycle';
+      cycle.textContent = '↻ cycle';
+      row.appendChild(cycle);
+      continue;
+    }
+
+    if (expandable && (!collapsed.has(frame.id) || filter)) {
+      if (renderNodeBudget <= 0) {
+        renderTruncated = true;
+        continue;
+      }
+      const children = document.createElement('ul');
+      item.appendChild(children);
+      activeAncestors.add(frame.id);
+      frames.push({ type: 'exit', id: frame.id });
+      for (let index = orderedChildren.length - 1; index >= 0; index--) {
+        const childId = orderedChildren[index];
+        frames.push({
+          type: 'enter',
+          id: childId,
+          parent: children,
+          occurrenceParent: occurrence,
+          selectedPrefix: Boolean(
+            frame.selectedPrefix && selectedPath?.[occurrence.depth] === childId
+          ),
+        });
       }
     }
-    if (children.childElementCount > 0) {
-      item.appendChild(children);
-    }
   }
 
-  return item;
+  return holder.firstElementChild as HTMLLIElement | undefined;
 }
 
 function normalizedFilter(): string {
   return filterInput.value.trim().toLocaleLowerCase();
 }
 
-function isSelectedOccurrence(id: string, path: readonly string[]): boolean {
-  if (!selectedOccurrence || selectedOccurrence.id !== id || selectedOccurrence.path.length !== path.length) {
+function isSelectedOccurrenceNode(occurrence: HierarchyOccurrence): boolean {
+  if (!selectedOccurrence || selectedOccurrence.id !== occurrence.id ||
+      selectedOccurrence.path.length !== occurrence.depth) {
     return false;
   }
-  return path.every((pathId, index) => selectedOccurrence?.path[index] === pathId);
+  let cursor: HierarchyOccurrence | undefined = occurrence;
+  for (let index = occurrence.depth - 1; index >= 0; index--) {
+    if (!cursor || selectedOccurrence.path[index] !== cursor.id) {
+      return false;
+    }
+    cursor = cursor.parent;
+  }
+  return true;
+}
+
+function occurrenceToPath(occurrence: HierarchyOccurrence): string[] {
+  const path = new Array<string>(occurrence.depth);
+  let cursor: HierarchyOccurrence | undefined = occurrence;
+  for (let index = occurrence.depth - 1; index >= 0 && cursor; index--) {
+    path[index] = cursor.id;
+    cursor = cursor.parent;
+  }
+  return path;
 }
 
 function selectOccurrence(id: string, path: readonly string[], row: HTMLDivElement): void {
@@ -502,40 +572,6 @@ function hideTreeContextMenu(): void {
   contextNodeId = undefined;
 }
 
-function branchMatches(
-  id: string,
-  filter: string,
-  ancestors: Set<string>,
-  memo: Map<string, boolean>
-): boolean {
-  if (ancestors.has(id)) {
-    return false;
-  }
-  const memoized = memo.get(id);
-  if (memoized !== undefined) {
-    return memoized;
-  }
-  const node = nodeById.get(id);
-  if (!node) {
-    return false;
-  }
-  if (node.name.toLocaleLowerCase().includes(filter)) {
-    memo.set(id, true);
-    return true;
-  }
-
-  const nextAncestors = new Set(ancestors);
-  nextAncestors.add(id);
-  for (const childId of node.children) {
-    if (branchMatches(childId, filter, nextAncestors, memo)) {
-      memo.set(id, true);
-      return true;
-    }
-  }
-  memo.set(id, false);
-  return false;
-}
-
 function clearModelStatus(): void {
   summaryElement.textContent = '';
   noticeElement.textContent = '';
@@ -566,7 +602,9 @@ function completeRootList(roots: string[], nodes: ClassHierarchyNode[]): string[
         continue;
       }
       reached.add(id);
-      pending.push(...node.children);
+      for (const childId of node.children) {
+        pending.push(childId);
+      }
     }
   };
 

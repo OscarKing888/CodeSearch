@@ -368,7 +368,9 @@ function canReach<TMetadata>(
     visited.add(currentId);
     const current = nodesById.get(currentId);
     if (current) {
-      pending.push(...current.derivedIds);
+      for (const derivedId of current.derivedIds) {
+        pending.push(derivedId);
+      }
     }
   }
   return false;

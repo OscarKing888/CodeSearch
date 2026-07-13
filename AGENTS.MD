@@ -119,6 +119,7 @@
 - Secondary cache rows retain their original indexed path; map paths through `IndexManager.mapHitPath()` only while building the display model. Prefix declaration IDs by index and deduplicate mapped locations so primary/secondary copies do not collide.
 - The standalone panel shell is `src/ui/ClassHierarchyPanel.ts`; browser code is `src/ui/class-hierarchy-webview/main.ts`, bundled to `dist/webview/class-hierarchy.js`. The parser worker bundles separately to `dist/workers/class-hierarchy-worker.js`. Class-name clicks use the mapped path and one-based line/column through the host, never a webview command URI.
 - Large trees start collapsed and cap each render at 5,000 occurrences. Filtering keeps an occurrence-level selection; clearing the filter expands and prioritizes every node on its path before scrolling it into view. The class-row context menu expands/collapses all reachable subclasses and must remain cycle/DAG safe.
+- Filtering is stack-safe: `collectHierarchyFilterMatches()` finds direct name matches and propagates visibility through reverse parent edges iteratively, while the webview renderer uses explicit enter/exit frames rather than recursive DOM calls. Keep unknown-size declaration/child appends as loops, not `array.push(...items)`; large UE indexes can exceed V8's argument limit even when graph depth is shallow.
 - Keep cache/parser/worker/tree-state coverage (`test/classHierarchy*.test.ts`) explicit in the `npm test` chain. The UI should remain cycle-safe and use DOM `textContent` for class names and paths.
 
 ## Header/Source pairing
