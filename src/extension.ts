@@ -126,6 +126,12 @@ function registerCommands(context: vscode.ExtensionContext): void {
       }
       manageIndexes();
     }),
+    vscode.commands.registerCommand('codeSearch.openClassHierarchy', async () => {
+      if (!(await ensureWorkspaceReady())) {
+        return;
+      }
+      await panelProvider?.showClassHierarchy();
+    }),
     vscode.commands.registerCommand('codeSearch.openSettings', () => {
       void vscode.commands.executeCommand(
         'workbench.action.openSettings',

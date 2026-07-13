@@ -99,9 +99,11 @@ const btnPhrase = document.getElementById('btnPhrase') as HTMLButtonElement;
 const btnFuzzy = document.getElementById('btnFuzzy') as HTMLButtonElement;
 const btnLoose = document.getElementById('btnLoose') as HTMLButtonElement;
 const btnContext = document.getElementById('btnContext') as HTMLButtonElement;
+const contextLineCount = document.getElementById('contextLineCount') as HTMLSpanElement;
 const btnCtxLess = document.getElementById('btnCtxLess') as HTMLButtonElement;
 const btnCtxMore = document.getElementById('btnCtxMore') as HTMLButtonElement;
 const btnRefresh = document.getElementById('btnRefresh') as HTMLButtonElement;
+const btnHierarchy = document.getElementById('btnHierarchy') as HTMLButtonElement;
 const btnManage = document.getElementById('btnManage') as HTMLButtonElement;
 const btnSettings = document.getElementById('btnSettings') as HTMLButtonElement;
 const statusHits = document.getElementById('statusHits') as HTMLSpanElement;
@@ -453,10 +455,11 @@ function syncContextButton(): void {
   const tab = getActiveTab();
   const show = tab?.showContext ?? false;
   btnContext.classList.toggle('active', show);
-  btnContext.textContent = `Ctx${configContextLines > 0 ? `·${configContextLines}` : ''}`;
+  contextLineCount.textContent = String(configContextLines);
   btnContext.title = show
     ? `Hide context lines (${configContextLines} per side)`
     : `Show context lines (${configContextLines} per side)`;
+  btnContext.setAttribute('aria-label', btnContext.title);
   btnCtxLess.disabled = configContextLines <= 0;
   btnCtxMore.disabled = configContextLines >= 10;
 }
@@ -673,6 +676,9 @@ btnCtxLess.addEventListener('click', () => changeContextLines(configContextLines
 btnCtxMore.addEventListener('click', () => changeContextLines(configContextLines + 1));
 
 btnRefresh.addEventListener('click', () => vscode.postMessage({ type: 'refreshIndex' }));
+btnHierarchy.addEventListener('click', () => {
+  vscode.postMessage({ type: 'openClassHierarchy' });
+});
 btnManage.addEventListener('click', () => vscode.postMessage({ type: 'manageIndexes' }));
 btnSettings.addEventListener('click', () => vscode.postMessage({ type: 'openSettings' }));
 

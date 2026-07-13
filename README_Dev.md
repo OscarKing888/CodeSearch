@@ -326,6 +326,7 @@ CREATE TABLE tokens (
 | `codeSearch.prevHit` | `Ctrl+Alt+[` | 上一命中（面板内聚焦时） |
 | `codeSearch.switchHeaderSource` | `Alt+O` | 在索引中查找并切换头/源文件（C/C++ 扩展名） |
 | `codeSearch.refreshIndex` | — | 强制重建索引 |
+| `codeSearch.openClassHierarchy` | — | 直接打开全部已索引 C++ class 的继承树 panel |
 
 ### 配置项
 
@@ -342,6 +343,8 @@ CREATE TABLE tokens (
 **1. 二进制检测**: 读取文件头最多 8KB，检测 null 字节或不可打印字符比例 > 30%，或 UTF-8 替换字符过多，则跳过该文件。
 
 **2. 索引性能**: 批量事务（每 100 文件 commit 一次）；`IndexService` 在搜索/用户输入时暂停扫描（`pauseIndexing()`）。
+
+**3. Class 继承缓存**: `ClassHierarchyCacheManager` 仅在索引和搜索空闲时读取待更新源码，最多两个 Worker 只负责解析，完成后由扩展线程集中、分批提交 `class_hierarchy_*` 缓存表，并在批次间重新检查搜索/索引状态。只读或无缓存的旧 secondary index 不执行 schema 写入，打开继承树时改用一次内存解析。
 
 **3. 语法高亮**: Webview 通过 `postMessage` 获取当前 `colorTheme`，用 `vscode-textmate` 对结果行 tokenize，映射到 CSS class。
 

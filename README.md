@@ -47,6 +47,16 @@ VS Code 扩展，基于 SQLite FTS5 提供全文代码索引与即时搜索。
 - **命令**：`codeSearch.switchHeaderSource`（Ace Code Search: Switch Header/Source）
 - **快捷键冲突**：扩展启动时会自动迁移用户 `keybindings.json` 里仍指向 `C_Cpp.SwitchHeaderSource` / `clangd.switchheadersource` 的 Alt+O 绑定，并持续劫持上述旧命令 ID
 
+## Class 继承树
+
+无需先搜索，直接点击搜索工具栏中的继承树图标，即可在新的编辑器 panel 中查看所有已索引 C/C++ `class` / `struct` 的继承关系。点击 class 名称会打开声明文件并定位到对应代码行。
+
+- 继承声明缓存在索引数据库中；源码变化后自动失效，并在搜索和索引空闲时由最多两个后台解析线程增量更新
+- 缓存解析完成后集中写入数据库，不把解析工作插入现有的全文搜索或索引建立流程；只读旧索引保持兼容并使用内存回退
+- 支持 UE `MODULE_API`、namespace、多行声明、`final`、多继承、访问修饰符和 `virtual` 基类；索引外基类以灰色外部节点补齐
+- 超大继承图默认折叠，单次最多渲染 5,000 个树节点；过滤选中 class 后清空过滤会回到该位置
+- 右键 class 可展开或折叠它的全部子类；点击顶部 Refresh 可立即读取最新缓存状态
+
 ## 性能特性
 
 Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重复搜索时通常比 VS Code 内置实时扫盘搜索更快。
@@ -97,11 +107,12 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 | | 语法高亮结果 | 🟡 规则高亮（非完整 TextMate 主题） |
 | | 命中数 / 耗时统计 | ✅ |
 | | 可排序结果列表（路径 / 行号 / 代码） | ✅ 点击表头升/降序 |
-| | 上下文行显示 | ✅ 工具栏 Ctx；行数由 `contextLines` 配置 |
+| | 上下文行显示 | ✅ 工具栏上下文图标；行数由 `contextLines` 配置 |
 | | 查询语法着色（绿 / 红过滤） | ✅ |
 | | 多标签页 | ✅ Ctrl+Enter / + 新建 |
 | | 标签锁定 | ✅ |
 | | 代码词自动补全 | ✅ |
+| | 全索引 C++ class 继承树 | ✅ 工具栏继承树图标；点击 class 跳转声明 |
 | **导航** | 光标下单词 / 选中文本搜索 | ✅ `Alt+=` |
 | | Ctrl+Alt+] / Ctrl+Alt+[ 跳转下/上命中 | ✅ |
 | | Shift+Alt+F 快速打开文件 | ✅ |
@@ -123,6 +134,7 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 | Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | 命令面板 |
 | Manage Indexes | 工具栏 ⚙ |
+| Show Class Inheritance Tree | 工具栏继承树图标 / 命令面板 |
 | Open Secondary Index | 命令面板 |
 
 ## 安装与构建

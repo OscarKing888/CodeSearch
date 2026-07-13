@@ -47,6 +47,16 @@ After **C/C++ files are indexed**, press **`Alt+O`** to switch between paired `.
 - **Command**: `codeSearch.switchHeaderSource` (Ace Code Search: Switch Header/Source)
 - **Shortcut conflicts**: on activation the extension auto-migrates user `keybindings.json` entries that still bind Alt+O to `C_Cpp.SwitchHeaderSource` / `clangd.switchheadersource`, and keeps overriding those legacy command IDs
 
+## Class Inheritance Tree
+
+Click the hierarchy icon in the search toolbar—no search is required—to open a separate panel containing all indexed C/C++ `class` / `struct` inheritance relationships. Clicking a class name opens its declaration at the indexed line.
+
+- Declarations are incrementally cached in writable index databases while search and indexing are idle; parsing uses at most two background workers
+- Read-only legacy secondary indexes remain compatible and use an on-demand in-memory fallback
+- Supports UE API macros, namespaces, multiline declarations, `final`, multiple inheritance, access modifiers, and virtual bases
+- Clearing a filter returns to the selected class, and the class context menu can expand or collapse all subclasses
+- Large graphs start collapsed and cap each render at 5,000 tree occurrences; use the filter to narrow further
+
 ## Performance
 
 Ace Code Search uses **pre-indexed, persistent full-text search**. For repeated searches in large repositories, it is typically faster than VS Code’s built-in on-demand disk scan.
@@ -97,11 +107,12 @@ Compared to built-in search: built-in is fine for ad-hoc, small-scope lookups; t
 | | Syntax-highlighted results | 🟡 Rule-based highlighting (not full TextMate theme) |
 | | Hit count / elapsed time | ✅ |
 | | Sortable result list (path / line / code) | ✅ Click column headers |
-| | Context lines | ✅ Toolbar Ctx; lines via `contextLines` setting |
+| | Context lines | ✅ Toolbar context icon; lines via `contextLines` setting |
 | | Query syntax coloring (green / red filters) | ✅ |
 | | Multiple tabs | ✅ Ctrl+Enter / + for new tab |
 | | Tab lock | ✅ |
 | | Code word autocomplete | ✅ |
+| | Full-index C++ class hierarchy | ✅ Toolbar hierarchy icon; class names open declarations |
 | **Navigation** | Search word under cursor / selection | ✅ `Alt+=` |
 | | Ctrl+Alt+] / Ctrl+Alt+[ next/previous hit | ✅ |
 | | Shift+Alt+F quick open file | ✅ |
@@ -123,6 +134,7 @@ Legend: ✅ Done · 🟡 Partial · ⬜ Planned
 | Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | Command palette |
 | Manage Indexes | Toolbar ⚙ |
+| Show Class Inheritance Tree | Toolbar hierarchy icon / command palette |
 | Open Secondary Index | Command palette |
 
 ## Install & Build

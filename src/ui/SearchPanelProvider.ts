@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { performance } from 'perf_hooks';
 import { getConfig } from '../config';
-import { isBinaryExtension } from '../index/FileScanner';
+import { ClassHierarchyCacheManager } from '../hierarchy/ClassHierarchyCacheManager';
+import { ClassHierarchyModel } from '../hierarchy/ClassHierarchyModel';
 import { IndexManager } from '../index/IndexManager';
 import { MultiIndexSearchService, MultiSearchResult, MultiSearchStreamBatch, getRelativePath } from '../search/MultiIndexSearchService';
 import { FIRST_BATCH_SIZE, UI_POST_CHUNK_SIZE, yieldToEventLoop } from '../search/searchStreamBuffer';
@@ -17,6 +18,8 @@ import {
   ResultsPartialAckController,
   ResultsPartialAckOutcome,
 } from './resultsPartialAckController';
+import { ClassHierarchyPanel } from './ClassHierarchyPanel';
+import { openCodeLocation } from './openCodeLocation';
 
 const UI_CONTEXT_LINES_KEY = 'codeSearch.ui.contextLines';
 const CONTEXT_LINES_MIN = 0;
@@ -40,6 +43,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   private readonly partialAckController = new ResultsPartialAckController();
   private readonly profileSessions = new Map<number, SearchProfileSession>();
   private readonly profileFinalizations = new Map<number, Promise<string | undefined>>();
+  private hierarchyCache: ClassHierarchyCacheManager | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -47,7 +51,17 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     private searchService: MultiIndexSearchService,
     private workspaceRoots: string[],
     private readonly context: vscode.ExtensionContext
-  ) {}
+  ) {
+    this.bindHierarchyCache();
+    ClassHierarchyPanel.register(
+      context,
+      (signal, force) => this.loadClassHierarchy(signal, force),
+      (location) => openCodeLocation(location, {
+        preview: true,
+        viewColumn: vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One,
+      })
+    );
+  }
 
   rebind(
     indexManager: IndexManager,
@@ -57,6 +71,9 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     this.indexManager = indexManager;
     this.searchService = searchService;
     this.workspaceRoots = workspaceRoots;
+    void this.hierarchyCache?.dispose();
+    this.bindHierarchyCache();
+    ClassHierarchyPanel.refresh();
     this.sendIndexStatus();
   }
 
@@ -73,7 +90,10 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   async disposeActiveSearches(): Promise<void> {
     this.searchSeq++;
     this.partialAckController.cancelActive();
-    await this.finalizeAllProfiles('disposed');
+    await Promise.all([
+      this.finalizeAllProfiles('disposed'),
+      this.disposeHierarchyCache(),
+    ]);
   }
 
   resolveWebviewView(
@@ -159,6 +179,9 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'manageIndexes':
           await vscode.commands.executeCommand('codeSearch.manageIndexes');
+          break;
+        case 'openClassHierarchy':
+          await this.showClassHierarchy();
           break;
         case 'openSettings':
           await vscode.commands.executeCommand('codeSearch.openSettings');
@@ -609,24 +632,58 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'navigateHit', direction: 'prev' });
   }
 
+  async showClassHierarchy(): Promise<void> {
+    ClassHierarchyPanel.show();
+  }
+
+  private bindHierarchyCache(): void {
+    const workerScript = vscode.Uri.joinPath(
+      this.extensionUri,
+      'dist',
+      'workers',
+      'class-hierarchy-worker.js'
+    ).fsPath;
+    const cache = new ClassHierarchyCacheManager(this.indexManager, workerScript);
+    cache.on('updated', () => ClassHierarchyPanel.refresh());
+    cache.start();
+    this.hierarchyCache = cache;
+  }
+
+  private async disposeHierarchyCache(): Promise<void> {
+    const cache = this.hierarchyCache;
+    if (!cache) {
+      return;
+    }
+    this.hierarchyCache = undefined;
+    await cache.dispose();
+    ClassHierarchyPanel.refresh();
+  }
+
+  private loadClassHierarchy(
+    signal: AbortSignal,
+    force: boolean
+  ): Promise<ClassHierarchyModel> {
+    const cache = this.hierarchyCache;
+    if (cache) {
+      return cache.buildModel(signal, force);
+    }
+    return Promise.resolve({
+      roots: [],
+      nodes: [],
+      classCount: 0,
+      externalBaseCount: 0,
+      parsedFileCount: 0,
+      partialIndex: true,
+    });
+  }
+
   private async openHitAt(
     path: string,
     line: number,
     column: number,
     preview: boolean
   ): Promise<void> {
-    if (isBinaryExtension(path)) {
-      void vscode.window.showWarningMessage(`Ace Code Search: 无法打开二进制文件 ${path}`);
-      return;
-    }
-    const uri = vscode.Uri.file(path);
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const options: vscode.TextDocumentShowOptions = {
-      selection: new vscode.Range(line - 1, column - 1, line - 1, column - 1),
-      viewColumn: vscode.ViewColumn.Active,
-      preview,
-    };
-    await vscode.window.showTextDocument(doc, options);
+    await openCodeLocation({ path, line, column }, { preview });
   }
 
   sendIndexStatus(): void {
@@ -1012,6 +1069,27 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
     }
+    .btn-icon {
+      display: block;
+      width: 16px;
+      height: 16px;
+      pointer-events: none;
+    }
+    .btn-icon path,
+    .btn-icon circle {
+      vector-effect: non-scaling-stroke;
+    }
+    .btn-with-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+    .btn-count {
+      min-width: 1ch;
+      font-variant-numeric: tabular-nums;
+      line-height: 16px;
+    }
     .ctx-lines-wrap {
       display: flex;
       align-items: center;
@@ -1264,10 +1342,24 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     <button class="btn" id="btnLoose" title="Loose phrase search">~</button>
     <span class="ctx-lines-wrap">
       <button class="btn btn-narrow" id="btnCtxLess" title="Fewer context lines (0-10)">−</button>
-      <button class="btn" id="btnContext" title="Show context lines">Ctx</button>
+      <button class="btn btn-with-count" id="btnContext" title="Show context lines" aria-label="Show context lines">
+        <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+          <path opacity=".65" d="M3 3.5h10M3 12.5h10"></path>
+          <path stroke-width="2" d="M2 8h12"></path>
+        </svg>
+        <span class="btn-count" id="contextLineCount">1</span>
+      </button>
       <button class="btn btn-narrow" id="btnCtxMore" title="More context lines (0-10)">+</button>
     </span>
     <button class="btn" id="btnRefresh" title="Refresh index">⟳</button>
+    <button class="btn" id="btnHierarchy" title="Show class inheritance tree" aria-label="Show class inheritance tree">
+      <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 4.5v3M4 11V8h8v3"></path>
+        <circle cx="8" cy="3" r="1.5"></circle>
+        <circle cx="4" cy="12.5" r="1.5"></circle>
+        <circle cx="12" cy="12.5" r="1.5"></circle>
+      </svg>
+    </button>
     <button class="btn" id="btnManage" title="Manage indexes">⚙</button>
     <button class="btn" id="btnSettings" title="Open Ace Code Search settings">☰</button>
   </div>

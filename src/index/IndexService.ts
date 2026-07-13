@@ -125,6 +125,14 @@ export class IndexService extends EventEmitter {
     return this.readOnly;
   }
 
+  /** True when low-priority hierarchy cache work may touch this database. */
+  isBackgroundWorkAllowed(): boolean {
+    return !this.indexing &&
+      this.pauseCount === 0 &&
+      this.status !== 'scanning' &&
+      this.status !== 'indexing';
+  }
+
   async initialize(rootDirs: string[]): Promise<void> {
     this.rootDirs = rootDirs;
     const dir = path.dirname(this.dbPath);

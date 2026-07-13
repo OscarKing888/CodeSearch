@@ -4,6 +4,10 @@ All notable changes to the Ace Code Search extension are documented in this file
 
 ## Unreleased
 
+### Added
+- Add a workspace-wide C++/UE class inheritance panel that opens without a prior search, caches declarations incrementally in each writable index, and preserves read-only legacy-index compatibility through an in-memory fallback.
+- Add hierarchy/context SVG toolbar icons, filter-clear selection reveal, and subclass expand/collapse actions in the class-row context menu.
+
 ### Fixed
 - Move editor file watching out of the extension-host chokidar crawl, coalesce queued changes during searches, and prevent large Unreal Engine workspaces from starving search/UI work.
 - Persist search profiles from search start through success, cancellation, errors, or disposal, including incremental checkpoints and ACK wait timings.
@@ -11,6 +15,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 
 ### Changed
 - Show loaded versus discovered hit counts while streaming and keep search profiling disabled by default.
+
+## [0.6.0] - 2026-07-13
+
+### Changed
+- Add class viewer.
 
 ## [0.5.0] - 2026-07-10
 

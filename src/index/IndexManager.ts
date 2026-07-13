@@ -325,6 +325,7 @@ export class IndexManager extends EventEmitter {
     }
     this.registry.upsert(meta);
     await this.registry.save();
+    this.emit('indexesChanged');
     return true;
   }
 
