@@ -118,6 +118,44 @@ export function revealHierarchySubclasses(collapsed: Set<string>, path: readonly
   }
 }
 
+/** Keep expansion choices for stable nodes while collapsing newly introduced branches. */
+export function retainCollapsedHierarchyNodes(
+  previousCollapsed: ReadonlySet<string>,
+  previousNodes: ReadonlyMap<string, ClassHierarchyTreeNode>,
+  nextNodes: ReadonlyMap<string, ClassHierarchyTreeNode>
+): Set<string> {
+  const retained = new Set<string>();
+  for (const [id, node] of nextNodes) {
+    if (node.children.length === 0) {
+      continue;
+    }
+    if (!previousNodes.has(id) || previousCollapsed.has(id)) {
+      retained.add(id);
+    }
+  }
+  return retained;
+}
+
+/** A selected occurrence is reusable only when its complete parent-child path remains valid. */
+export function isHierarchyOccurrencePathValid(
+  nodeById: ReadonlyMap<string, ClassHierarchyTreeNode>,
+  path: readonly string[]
+): boolean {
+  if (path.length === 0) {
+    return false;
+  }
+  for (let index = 0; index < path.length; index++) {
+    const node = nodeById.get(path[index]);
+    if (!node) {
+      return false;
+    }
+    if (index > 0 && !nodeById.get(path[index - 1])?.children.includes(path[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Put the selected occurrence's root first so it survives the webview render budget. */
 export function prioritizeHierarchyRoot(
   roots: readonly string[],

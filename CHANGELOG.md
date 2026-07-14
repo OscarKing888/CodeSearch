@@ -17,6 +17,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 ### Changed
 - Show loaded versus discovered hit counts while streaming and keep search profiling disabled by default.
 
+## [0.6.2] - 2026-07-14
+
+### Changed
+- fix auto refresh bug.
+
 ## [0.6.1] - 2026-07-14
 
 ### Changed

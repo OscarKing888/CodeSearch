@@ -2,10 +2,12 @@ import {
   collapseAllSubclasses,
   collectHierarchyFilterMatches,
   expandAllSubclasses,
+  isHierarchyOccurrencePathValid,
   prioritizeHierarchyChild,
   prioritizeHierarchyRoot,
   revealHierarchyPath,
   revealHierarchySubclasses,
+  retainCollapsedHierarchyNodes,
 } from '../classHierarchyTreeState';
 
 declare function acquireVsCodeApi(): {
@@ -179,18 +181,31 @@ vscode.postMessage({ type: 'ready' });
 
 function setModel(nextModel: ClassHierarchyModel): void {
   hideTreeContextMenu();
+  const previousNodeById = nodeById;
+  const previousCollapsed = new Set(collapsed);
+  const previousSelection = selectedOccurrence;
   model = nextModel;
   nodeById = new Map(nextModel.nodes.map((node) => [node.id, node]));
   displayRoots = completeRootList(nextModel.roots, nextModel.nodes);
-  selectedOccurrence = undefined;
   selectedRow = undefined;
-  revealSelectedAfterRender = false;
+  if (
+    previousSelection &&
+    previousSelection.id === previousSelection.path[previousSelection.path.length - 1] &&
+    isHierarchyOccurrencePathValid(nodeById, previousSelection.path)
+  ) {
+    selectedOccurrence = {
+      id: previousSelection.id,
+      path: [...previousSelection.path],
+    };
+    revealSelectedAfterRender = true;
+  } else {
+    selectedOccurrence = undefined;
+    revealSelectedAfterRender = false;
+  }
   previousFilter = normalizedFilter();
   collapsed.clear();
-  for (const node of nextModel.nodes) {
-    if (node.children.length > 0) {
-      collapsed.add(node.id);
-    }
+  for (const id of retainCollapsedHierarchyNodes(previousCollapsed, previousNodeById, nodeById)) {
+    collapsed.add(id);
   }
   renderSummary();
   renderNotice();

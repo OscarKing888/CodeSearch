@@ -6,10 +6,12 @@ import {
   collectHierarchyDescendants,
   collectHierarchyFilterMatches,
   expandAllSubclasses,
+  isHierarchyOccurrencePathValid,
   prioritizeHierarchyChild,
   prioritizeHierarchyRoot,
   revealHierarchyPath,
   revealHierarchySubclasses,
+  retainCollapsedHierarchyNodes,
 } from '../src/ui/classHierarchyTreeState';
 
 function node(id: string, children: string[] = []): ClassHierarchyTreeNode {
@@ -61,6 +63,33 @@ assert.deepStrictEqual(
   [...showSubclassesState],
   ['leaf'],
   'showing subclasses must reveal the occurrence path and open the selected class'
+);
+
+const previousModelNodes = new Map<string, ClassHierarchyTreeNode>([
+  ['root', node('root', ['selected'])],
+  ['selected', node('selected', ['leaf'])],
+  ['leaf', node('leaf')],
+]);
+const refreshedModelNodes = new Map<string, ClassHierarchyTreeNode>([
+  ['root', node('root', ['selected', 'new-branch'])],
+  ['selected', node('selected', ['leaf'])],
+  ['leaf', node('leaf')],
+  ['new-branch', node('new-branch', ['new-leaf'])],
+  ['new-leaf', node('new-leaf')],
+]);
+assert.deepStrictEqual(
+  [...retainCollapsedHierarchyNodes(new Set<string>(), previousModelNodes, refreshedModelNodes)],
+  ['new-branch'],
+  'a model refresh must preserve opened stable branches and collapse only new ones'
+);
+assert.strictEqual(
+  isHierarchyOccurrencePathValid(refreshedModelNodes, ['root', 'selected', 'leaf']),
+  true
+);
+assert.strictEqual(
+  isHierarchyOccurrencePathValid(refreshedModelNodes, ['root', 'new-leaf']),
+  false,
+  'selection reuse must require the complete occurrence path'
 );
 
 assert.deepStrictEqual(
