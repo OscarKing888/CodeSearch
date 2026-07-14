@@ -96,7 +96,7 @@ interface NamespaceRange {
 }
 
 /**
- * Extract C++ class/struct definition headers from a complete source file.
+ * Extract C++ or C# class/struct definition headers from a complete source file.
  *
  * This intentionally parses only declaration headers. Bodies are never inspected
  * semantically, but nested declarations are still found by the outer scan.
@@ -118,6 +118,15 @@ export function extractClassDeclarations<TMetadata = ClassLocationMetadata>(
   const options: ExtractClassDeclarationsOptions<TMetadata> = typeof optionsOrPath === 'string'
     ? { path: optionsOrPath, hitLines: positionalHitLines }
     : optionsOrPath;
+  return isCSharpSourcePath(options.path)
+    ? extractCSharpClassDeclarations(source, options)
+    : extractCppClassDeclarations(source, options);
+}
+
+function extractCppClassDeclarations<TMetadata = ClassLocationMetadata>(
+  source: string,
+  options: ExtractClassDeclarationsOptions<TMetadata>
+): ClassDeclaration<TMetadata>[] {
   const clean = maskCommentsAndLiterals(source);
   const lineStarts = collectLineStarts(source);
   const templateParameterRanges = findTemplateParameterRanges(clean);
@@ -200,6 +209,100 @@ export function extractClassDeclarations<TMetadata = ClassLocationMetadata>(
       qualifiedName,
       isFinal: /\bfinal\b/.test(namePart),
       bases,
+      location,
+    });
+  }
+
+  return declarations;
+}
+
+/**
+ * Parse C# declarations separately from C++ so file-scoped namespaces and
+ * `partial class Foo : CppBase` declarations keep enough information to join
+ * UnrealSharp classes to the native hierarchy.
+ */
+function extractCSharpClassDeclarations<TMetadata = ClassLocationMetadata>(
+  source: string,
+  options: ExtractClassDeclarationsOptions<TMetadata>
+): ClassDeclaration<TMetadata>[] {
+  const clean = maskCommentsAndLiterals(source);
+  const lineStarts = collectLineStarts(source);
+  const namespaceRanges = findCSharpNamespaceRanges(clean);
+  const hitLines = options.hitLines === undefined
+    ? undefined
+    : new Set(Array.from(options.hitLines).filter((line) => Number.isInteger(line) && line > 0));
+  const declarations: ClassDeclaration<TMetadata>[] = [];
+  const keywordPattern = /\b(class|struct)\b/g;
+  let namespaceCursor = 0;
+  let activeNamespaces: NamespaceRange[] = [];
+
+  let match: RegExpExecArray | null;
+  while ((match = keywordPattern.exec(clean)) !== null) {
+    const keywordIndex = match.index;
+    const keywordEnd = keywordIndex + match[0].length;
+    while (
+      namespaceCursor < namespaceRanges.length &&
+      namespaceRanges[namespaceCursor].start < keywordIndex
+    ) {
+      const range = namespaceRanges[namespaceCursor++];
+      if (range.end > keywordIndex) {
+        activeNamespaces.push(range);
+      }
+    }
+    activeNamespaces = activeNamespaces.filter((range) => range.end > keywordIndex);
+
+    const header = scanDefinitionHeader(clean, keywordEnd);
+    if (!header) {
+      continue;
+    }
+
+    const headerText = clean.slice(keywordEnd, header.braceIndex);
+    const whereOffset = findTopLevelWord(headerText, 'where');
+    const declarationEnd = whereOffset >= 0 ? keywordEnd + whereOffset : header.braceIndex;
+    const colonIndex = header.colonIndex >= 0 && header.colonIndex < declarationEnd
+      ? header.colonIndex
+      : -1;
+    const nameEnd = colonIndex >= 0 ? colonIndex : declarationEnd;
+    const parsedName = parseCSharpDeclarationName(clean.slice(keywordEnd, nameEnd));
+    if (!parsedName) {
+      continue;
+    }
+
+    const startPosition = positionAt(lineStarts, keywordIndex);
+    const endPosition = positionAt(lineStarts, header.braceIndex);
+    if (hitLines && !rangeIntersectsLines(startPosition.line, endPosition.line, hitLines)) {
+      continue;
+    }
+
+    const namespacePrefix = activeNamespaces
+      .filter((range) => range.name)
+      .map((range) => range.name)
+      .join('::');
+    const qualifiedName = namespacePrefix
+      ? `${namespacePrefix}::${parsedName.qualifiedName}`
+      : parsedName.qualifiedName;
+    const basePart = colonIndex >= 0
+      ? clean.slice(colonIndex + 1, declarationEnd)
+      : '';
+    const kind = match[1] as ClassKind;
+    const location: ClassLocation<TMetadata> = {
+      path: options.path,
+      line: startPosition.line,
+      column: startPosition.column,
+      endLine: endPosition.line,
+      endColumn: endPosition.column,
+    };
+    if (options.metadata !== undefined) {
+      location.metadata = options.metadata;
+    }
+
+    declarations.push({
+      id: declarationId(options.path, startPosition.line, startPosition.column, qualifiedName),
+      kind,
+      name: parsedName.name,
+      qualifiedName,
+      isFinal: /\bsealed\s*$/.test(clean.slice(Math.max(0, keywordIndex - 256), keywordIndex)),
+      bases: parseCSharpBases(basePart, kind),
       location,
     });
   }
@@ -409,6 +512,72 @@ function parseDeclarationName(namePart: string): { name: string; qualifiedName: 
     selectedIndex--;
   }
   return { name: selected.value, qualifiedName };
+}
+
+function isCSharpSourcePath(sourcePath: string): boolean {
+  return /\.cs$/i.test(sourcePath);
+}
+
+function parseCSharpDeclarationName(namePart: string): { name: string; qualifiedName: string } | undefined {
+  const match = /^\s*(@?[A-Za-z_]\w*)/.exec(namePart);
+  if (!match) {
+    return undefined;
+  }
+  const suffix = namePart.slice(match[0].length);
+  if (!isCSharpTypeParameterSuffix(suffix)) {
+    return undefined;
+  }
+  const name = match[1].replace(/^@/, '');
+  return { name, qualifiedName: name };
+}
+
+function isCSharpTypeParameterSuffix(suffix: string): boolean {
+  const trimmed = suffix.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (trimmed[0] !== '<') {
+    return false;
+  }
+  return findMatchingDelimiter(trimmed, 0, '<', '>', trimmed.length) === trimmed.length - 1;
+}
+
+/** C# classes have one superclass; remaining colon-list entries are interfaces. */
+function parseCSharpBases(text: string, kind: ClassKind): ClassBase[] {
+  if (kind !== 'class') {
+    return [];
+  }
+  const firstBase = splitTopLevel(text, ',')[0]?.trim();
+  if (!firstBase) {
+    return [];
+  }
+  const name = normalizeCSharpDisplayName(firstBase);
+  const lookupName = normalizeCSharpLookupName(name);
+  if (!lookupName) {
+    return [];
+  }
+  return [{
+    name,
+    lookupName,
+    access: 'public',
+    isVirtual: false,
+  }];
+}
+
+function normalizeCSharpDisplayName(name: string): string {
+  return name
+    .trim()
+    .replace(/\bglobal\s*::\s*/g, '')
+    .replace(/@(?=[A-Za-z_])/g, '')
+    .replace(/\s*\.\s*/g, '.')
+    .replace(/\s*::\s*/g, '::')
+    .replace(/\s*<\s*/g, '<')
+    .replace(/\s*>\s*/g, '>')
+    .replace(/\s*,\s*/g, ', ');
+}
+
+function normalizeCSharpLookupName(name: string): string {
+  return normalizeLookupName(normalizeCSharpDisplayName(name).replace(/\./g, '::'));
 }
 
 function isValidClassHeadSuffix(suffix: string): boolean {
@@ -720,6 +889,83 @@ function findNamespaceRanges(clean: string): NamespaceRange[] {
     }
   }
   return ranges.sort((a, b) => a.start - b.start);
+}
+
+function findCSharpNamespaceRanges(clean: string): NamespaceRange[] {
+  const ranges: NamespaceRange[] = [];
+  const namespaceByBrace = new Map<number, string>();
+  const blockPattern = /\bnamespace\s+(@?[A-Za-z_]\w*(?:\s*\.\s*@?[A-Za-z_]\w*)*)\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = blockPattern.exec(clean)) !== null) {
+    const braceOffset = match[0].lastIndexOf('{');
+    namespaceByBrace.set(
+      match.index + braceOffset,
+      normalizeCSharpNamespaceName(match[1])
+    );
+  }
+
+  const braceStack: Array<{ start: number; namespaceName?: string }> = [];
+  for (let index = 0; index < clean.length; index++) {
+    if (clean[index] === '{') {
+      braceStack.push({ start: index, namespaceName: namespaceByBrace.get(index) });
+    } else if (clean[index] === '}') {
+      const frame = braceStack.pop();
+      if (frame?.namespaceName !== undefined) {
+        ranges.push({ start: frame.start, end: index, name: frame.namespaceName });
+      }
+    }
+  }
+
+  const fileScopedPattern = /\bnamespace\s+(@?[A-Za-z_]\w*(?:\s*\.\s*@?[A-Za-z_]\w*)*)\s*;/g;
+  while ((match = fileScopedPattern.exec(clean)) !== null) {
+    ranges.push({
+      start: match.index,
+      end: clean.length,
+      name: normalizeCSharpNamespaceName(match[1]),
+    });
+  }
+  return ranges.sort((a, b) => a.start - b.start || b.end - a.end);
+}
+
+function normalizeCSharpNamespaceName(name: string): string {
+  return name
+    .replace(/@(?=[A-Za-z_])/g, '')
+    .replace(/\s*\.\s*/g, '::');
+}
+
+function findTopLevelWord(text: string, word: string): number {
+  let paren = 0;
+  let bracket = 0;
+  let angle = 0;
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index];
+    if (ch === '(') {
+      paren++;
+    } else if (ch === ')') {
+      paren = Math.max(0, paren - 1);
+    } else if (ch === '[') {
+      bracket++;
+    } else if (ch === ']') {
+      bracket = Math.max(0, bracket - 1);
+    } else if (ch === '<') {
+      angle++;
+    } else if (ch === '>') {
+      angle = Math.max(0, angle - 1);
+    }
+    if (paren !== 0 || bracket !== 0 || angle !== 0 || !text.startsWith(word, index)) {
+      continue;
+    }
+    const before = text[index - 1];
+    const after = text[index + word.length];
+    if (!isIdentifierCharacter(before) && !isIdentifierCharacter(after)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isIdentifierCharacter(value: string | undefined): boolean {
+  return value !== undefined && /[A-Za-z0-9_]/.test(value);
 }
 
 function isInsideRanges(index: number, ranges: readonly (readonly [number, number])[]): boolean {

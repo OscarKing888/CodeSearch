@@ -9,6 +9,7 @@ import {
   prioritizeHierarchyChild,
   prioritizeHierarchyRoot,
   revealHierarchyPath,
+  revealHierarchySubclasses,
 } from '../src/ui/classHierarchyTreeState';
 
 function node(id: string, children: string[] = []): ClassHierarchyTreeNode {
@@ -53,6 +54,14 @@ assert.strictEqual(collapsed.has('unrelated'), true);
 const pathState = new Set(['root', 'left', 'shared', 'leaf']);
 revealHierarchyPath(pathState, ['root', 'left', 'shared', 'leaf']);
 assert.deepStrictEqual([...pathState], ['leaf'], 'only ancestors should be expanded');
+
+const showSubclassesState = new Set(['root', 'left', 'shared', 'leaf']);
+revealHierarchySubclasses(showSubclassesState, ['root', 'left', 'shared']);
+assert.deepStrictEqual(
+  [...showSubclassesState],
+  ['leaf'],
+  'showing subclasses must reveal the occurrence path and open the selected class'
+);
 
 assert.deepStrictEqual(
   prioritizeHierarchyRoot(['one', 'two', 'three'], ['three', 'child']),

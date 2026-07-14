@@ -68,6 +68,12 @@ function testWritableLifecycleAndAtomicValidation(): void {
     'class Derived final : public virtual Base {};\n',
     200
   );
+  const managed = insertFile(
+    db,
+    '/src/Managed/ScriptChild.cs',
+    'namespace Game.Managed;\npublic partial class ScriptChild : Base, IDisposable {}\n',
+    250
+  );
   insertFile(db, '/src/no-classes.hpp', '// intentionally empty\n', 300);
   insertFile(db, '/src/not-cpp.ts', 'class Ignored {}\n', 400);
 
@@ -82,13 +88,16 @@ function testWritableLifecycleAndAtomicValidation(): void {
   const first = store.listPendingFiles({ limit: 2 });
   assert.deepStrictEqual(first.files.map((file) => file.path), ['/src/Base.h', '/src/Derived.cpp']);
   assert.strictEqual(first.done, false);
-  const second = store.listPendingFiles({ afterFileId: first.nextAfterFileId, limit: 2 });
-  assert.deepStrictEqual(second.files.map((file) => file.path), ['/src/no-classes.hpp']);
+  const second = store.listPendingFiles({ afterFileId: first.nextAfterFileId, limit: 3 });
+  assert.deepStrictEqual(second.files.map((file) => file.path), [
+    '/src/Managed/ScriptChild.cs',
+    '/src/no-classes.hpp',
+  ]);
   assert.strictEqual(second.done, true);
 
   const pending = [...first.files, ...second.files];
   const sources = store.readSources(pending);
-  assert.strictEqual(sources.length, 3);
+  assert.strictEqual(sources.length, 4);
   assert.strictEqual(
     sources[0].fingerprint,
     computeClassHierarchySourceFingerprint(sources[0].content)
@@ -99,7 +108,11 @@ function testWritableLifecycleAndAtomicValidation(): void {
   assert.deepStrictEqual(store.listPendingFiles().files, [], 'zero-class files need a marker');
 
   const declarations = store.readCachedDeclarations();
-  assert.deepStrictEqual(declarations.map((declaration) => declaration.name), ['Base', 'Derived']);
+  assert.deepStrictEqual(declarations.map((declaration) => declaration.name), [
+    'Base',
+    'Derived',
+    'ScriptChild',
+  ]);
   const cachedDerived = declarations.find((declaration) => declaration.name === 'Derived');
   assert.ok(cachedDerived);
   assert.strictEqual(cachedDerived.isFinal, true);
@@ -110,10 +123,14 @@ function testWritableLifecycleAndAtomicValidation(): void {
     isVirtual: true,
   }]);
   assert.strictEqual(cachedDerived.location.path, '/src/Derived.cpp');
+  const cachedManaged = declarations.find((declaration) => declaration.name === 'ScriptChild');
+  assert.ok(cachedManaged);
+  assert.strictEqual(cachedManaged.qualifiedName, 'Game::Managed::ScriptChild');
+  assert.deepStrictEqual(cachedManaged.bases.map((base) => base.lookupName), ['Base']);
 
   // Initialization is idempotent and does not discard a compatible cache.
   store.initialize();
-  assert.strictEqual(store.readCachedDeclarations().length, 2);
+  assert.strictEqual(store.readCachedDeclarations().length, 3);
 
   // Keep the indexed signature unchanged to prove fingerprint validation catches
   // a force rewrite that mtime/size alone cannot distinguish.
@@ -123,7 +140,7 @@ function testWritableLifecycleAndAtomicValidation(): void {
   db.prepare('UPDATE files SET content = ? WHERE id = ?').run(replacement, base.id);
   assert.deepStrictEqual(
     store.readCachedDeclarations().map((declaration) => declaration.name),
-    ['Derived'],
+    ['Derived', 'ScriptChild'],
     'content-update trigger must hide stale declarations before reparsing'
   );
   assert.deepStrictEqual(store.applyParsedFiles([makeParsed(oldBaseSource)]), {
@@ -136,7 +153,7 @@ function testWritableLifecycleAndAtomicValidation(): void {
   assert.deepStrictEqual(changedResult.appliedFileIds, [base.id]);
   assert.deepStrictEqual(
     store.readCachedDeclarations().map((declaration) => declaration.name),
-    ['Next', 'Derived']
+    ['Next', 'Derived', 'ScriptChild']
   );
 
   assert.strictEqual(store.deleteFiles([derived.id, derived.id]), 1);

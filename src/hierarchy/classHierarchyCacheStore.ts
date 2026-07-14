@@ -3,13 +3,14 @@ import { SqliteDatabase } from '../native/betterSqlite3';
 import { ClassDeclaration } from './classHierarchy';
 
 export const CLASS_HIERARCHY_CACHE_SCHEMA_VERSION = 1;
-export const DEFAULT_CLASS_HIERARCHY_PARSER_VERSION = 1;
+export const DEFAULT_CLASS_HIERARCHY_PARSER_VERSION = 2;
 
 export const CLASS_HIERARCHY_SOURCE_EXTENSIONS = [
   'c',
   'cc',
   'cpp',
   'cxx',
+  'cs',
   'cu',
   'cuh',
   'h',

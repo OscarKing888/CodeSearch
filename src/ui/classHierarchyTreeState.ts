@@ -109,6 +109,15 @@ export function revealHierarchyPath(collapsed: Set<string>, path: readonly strin
   }
 }
 
+/** Clear the selected occurrence's ancestor path and open the selected class itself. */
+export function revealHierarchySubclasses(collapsed: Set<string>, path: readonly string[]): void {
+  revealHierarchyPath(collapsed, path);
+  const selectedId = path[path.length - 1];
+  if (selectedId) {
+    collapsed.delete(selectedId);
+  }
+}
+
 /** Put the selected occurrence's root first so it survives the webview render budget. */
 export function prioritizeHierarchyRoot(
   roots: readonly string[],

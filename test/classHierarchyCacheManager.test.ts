@@ -59,6 +59,12 @@ async function testBuildsAndRefreshesWorkspaceCache(): Promise<void> {
     await service.initialize(['/indexed']);
     insertFile(service, '/indexed/Base.h', 'class Base {};\n', 100);
     insertFile(service, '/indexed/Child.h', 'class Child : public Base {};\n', 200);
+    insertFile(
+      service,
+      '/indexed/Script/ManagedChild.cs',
+      'namespace Game;\npublic partial class ManagedChild : Base {}\n',
+      250
+    );
 
     const fakeManager = new FakeIndexManager(service);
     cache = new ClassHierarchyCacheManager(
@@ -68,15 +74,19 @@ async function testBuildsAndRefreshesWorkspaceCache(): Promise<void> {
     cache.start();
 
     const first = await cache.buildModel();
-    assert.strictEqual(first.classCount, 2);
-    assert.strictEqual(first.parsedFileCount, 2);
+    assert.strictEqual(first.classCount, 3);
+    assert.strictEqual(first.parsedFileCount, 3);
     assert.strictEqual(first.partialIndex, false);
     const base = first.nodes.find((node) => node.name === 'Base');
     const child = first.nodes.find((node) => node.name === 'Child');
+    const managedChild = first.nodes.find((node) => node.name === 'ManagedChild');
     assert.ok(base);
     assert.ok(child);
+    assert.ok(managedChild);
     assert.strictEqual(child.path, '/mapped/Child.h');
     assert.ok(base.children.includes(child.id));
+    assert.strictEqual(managedChild.path, '/mapped/Script/ManagedChild.cs');
+    assert.ok(base.children.includes(managedChild.id));
 
     fakeManager.mappedRoot = '/remapped/';
     fakeManager.emit('indexesChanged');
@@ -104,7 +114,7 @@ async function testBuildsAndRefreshesWorkspaceCache(): Promise<void> {
     const markerCount = db.prepare(
       'SELECT COUNT(*) AS count FROM class_hierarchy_files'
     ).get() as { count: number };
-    assert.strictEqual(markerCount.count, 2, 'one idle sync should atomically cache the batch');
+    assert.strictEqual(markerCount.count, 3, 'one idle sync should atomically cache the batch');
 
     const replacement = 'class Renamed : public Base {};\n';
     db.prepare('UPDATE files SET content = ?, mtime = ?, size = ? WHERE path = ?').run(
@@ -139,7 +149,7 @@ async function testBuildsAndRefreshesWorkspaceCache(): Promise<void> {
     cache = busyCache;
     busyCache.start();
     const whileBusy = await busyCache.buildModel();
-    assert.strictEqual(whileBusy.classCount, 1);
+    assert.strictEqual(whileBusy.classCount, 2);
     assert.strictEqual(
       whileBusy.nodes.find((node) => node.name === 'Base')?.path,
       '/forced/Base.h',

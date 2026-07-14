@@ -42,6 +42,11 @@ function testShouldIndexFileRejectsUasset(): void {
   const config = { ...DEFAULT_INDEXING_SETTINGS };
   assert.strictEqual(shouldIndexFile('C:/proj/Content/Foo.uasset', config, 1024), false);
   assert.strictEqual(shouldIndexFile('C:/proj/Source/Foo.cpp', config, 1024), true);
+  assert.strictEqual(
+    shouldIndexFile('C:/proj/Script/ManagedActor.cs', config, 1024),
+    true,
+    'C# UnrealSharp scripts must remain in the full-text index'
+  );
 }
 
 async function testContentDirExcludedFromParentRoot(): Promise<void> {

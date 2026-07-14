@@ -108,6 +108,46 @@ function testUnrealMetadataLinesCountAsDeclarationHits(): void {
   assert.strictEqual(template[0].location.line, 7);
 }
 
+function testCSharpUnrealSharpClassesJoinNativeBases(): void {
+  const native = extractClassDeclarations(
+    'class ANativePawn {};\n',
+    '/project/NativePawn.h'
+  );
+  const managed = extractClassDeclarations([
+    'namespace Game.Managed;',
+    '[UClass]',
+    'public partial class ManagedPawn : ANativePawn, IDisposable {',
+    '}',
+    'public sealed class ScriptPawn : ManagedPawn {',
+    '}',
+  ].join('\n'), '/project/Scripts/ManagedPawn.cs');
+
+  assert.deepStrictEqual(managed.map((item) => item.qualifiedName), [
+    'Game::Managed::ManagedPawn',
+    'Game::Managed::ScriptPawn',
+  ]);
+  assert.strictEqual(managed[0].location.line, 3);
+  assert.deepStrictEqual(managed[0].bases, [{
+    name: 'ANativePawn',
+    lookupName: 'ANativePawn',
+    access: 'public',
+    isVirtual: false,
+  }]);
+  assert.strictEqual(managed[1].isFinal, true);
+
+  const hierarchy = buildClassHierarchy([...native, ...managed]);
+  const nativePawn = findNode(hierarchy, 'ANativePawn');
+  const managedPawn = findNode(hierarchy, 'Game::Managed::ManagedPawn');
+  const scriptPawn = findNode(hierarchy, 'Game::Managed::ScriptPawn');
+  assert.ok(nativePawn.derivedIds.includes(managedPawn.id));
+  assert.ok(managedPawn.derivedIds.includes(scriptPawn.id));
+  assert.strictEqual(
+    hierarchy.nodes.some((node) => node.qualifiedName === 'IDisposable'),
+    false,
+    'C# interface entries must not become class-hierarchy bases'
+  );
+}
+
 function findNode(hierarchy: ReturnType<typeof buildClassHierarchy>, name: string) {
   const node = hierarchy.nodes.find((candidate) => candidate.qualifiedName === name);
   assert.ok(node, `expected hierarchy node ${name}`);
@@ -279,6 +319,7 @@ function main(): void {
   testExtractionAndHitFiltering();
   testAnnotationsAndQualifiedDeclaration();
   testUnrealMetadataLinesCountAsDeclarationHits();
+  testCSharpUnrealSharpClassesJoinNativeBases();
   testHierarchyDagAndExternalNodes();
   testRejectsElaboratedTypeUses();
   testAmbiguityAndCyclesAreSafe();

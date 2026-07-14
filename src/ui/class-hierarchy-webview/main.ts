@@ -5,6 +5,7 @@ import {
   prioritizeHierarchyChild,
   prioritizeHierarchyRoot,
   revealHierarchyPath,
+  revealHierarchySubclasses,
 } from '../classHierarchyTreeState';
 
 declare function acquireVsCodeApi(): {
@@ -57,6 +58,7 @@ const treeElement = document.getElementById('tree')!;
 const collapsed = new Set<string>();
 const {
   menu: treeContextMenu,
+  showSubclassesButton,
   expandButton: expandSubclassesButton,
   collapseButton: collapseSubclassesButton,
 } = createTreeContextMenu();
@@ -101,6 +103,19 @@ filterInput.addEventListener('input', () => {
     revealSelectedAfterRender = true;
   }
   previousFilter = nextFilter;
+  render();
+});
+
+showSubclassesButton.addEventListener('click', () => {
+  if (!contextNodeId) {
+    return;
+  }
+  const selectedPath = selectedOccurrence?.path ?? [contextNodeId];
+  filterInput.value = '';
+  previousFilter = '';
+  revealHierarchySubclasses(collapsed, selectedPath);
+  hideTreeContextMenu();
+  revealSelectedAfterRender = true;
   render();
 });
 
@@ -358,6 +373,9 @@ function renderNodeIterative(
         } else {
           collapsed.add(frame.id);
         }
+        // Replacing the tree DOM can otherwise leave the selected occurrence
+        // outside the viewport after expanding one of its descendants.
+        revealSelectedAfterRender = Boolean(selectedOccurrence);
         render();
       });
       row.appendChild(twistie);
@@ -476,6 +494,7 @@ function selectOccurrence(id: string, path: readonly string[], row: HTMLDivEleme
 
 function createTreeContextMenu(): {
   menu: HTMLDivElement;
+  showSubclassesButton: HTMLButtonElement;
   expandButton: HTMLButtonElement;
   collapseButton: HTMLButtonElement;
 } {
@@ -531,6 +550,12 @@ function createTreeContextMenu(): {
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', 'Class hierarchy actions');
 
+  const showSubclassesButton = document.createElement('button');
+  showSubclassesButton.type = 'button';
+  showSubclassesButton.className = 'tree-context-menu-item';
+  showSubclassesButton.textContent = '显示子类';
+  showSubclassesButton.setAttribute('role', 'menuitem');
+
   const expandButton = document.createElement('button');
   expandButton.type = 'button';
   expandButton.className = 'tree-context-menu-item';
@@ -543,11 +568,11 @@ function createTreeContextMenu(): {
   collapseButton.textContent = 'Collapse All Subclasses';
   collapseButton.setAttribute('role', 'menuitem');
 
-  menu.append(expandButton, collapseButton);
+  menu.append(showSubclassesButton, expandButton, collapseButton);
   menu.addEventListener('click', (event) => event.stopPropagation());
   menu.addEventListener('contextmenu', (event) => event.preventDefault());
   document.body.appendChild(menu);
-  return { menu, expandButton, collapseButton };
+  return { menu, showSubclassesButton, expandButton, collapseButton };
 }
 
 function showTreeContextMenu(clientX: number, clientY: number, nodeId: string): void {
