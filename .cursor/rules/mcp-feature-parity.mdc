@@ -1,0 +1,20 @@
+---
+description: Keep the Ace Code Search MCP server, Skill, and guidance in sync when adding or changing searchable product features.
+alwaysApply: true
+---
+
+# MCP Feature Parity
+
+When adding or changing Ace Code Search capabilities that agents should use (search modes, query syntax, filters, pairing, index discovery, read-only inspection):
+
+1. Update the read-only MCP surface in the same change: `src/mcp/tools.ts`, `src/mcp/server.ts`, and any needed `session`/`discover` support.
+2. Prefer reusing existing `SearchService` / `IndexService` APIs; keep MCP read-only (no indexing, registry writes, or watchers).
+3. Extend `test/mcpTools.test.ts` for new tools, parameters, filters, or result fields.
+4. Sync agent docs in the same change:
+   - `.cursor/skills/ace-code-search-mcp/SKILL.md`
+   - `resources/skills/ace-code-search-mcp/SKILL.md` (must stay byte-identical)
+   - `.cursor/rules/ace-code-search-first.mdc` and packaged guidance under `resources/rules/` when discovery defaults change
+   - `AGENTS.md` / `README_Dev.md` for MCP behavior notes
+5. If a feature is UI-only or unsafe for agents, explicitly document that it is out of MCP scope instead of silently omitting it.
+
+Do not ship panel/CLI search behavior that agents cannot discover through MCP without an intentional, documented exception.

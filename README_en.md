@@ -73,6 +73,61 @@ Ace Code Search uses **pre-indexed, persistent full-text search**. For repeated 
 
 Compared to built-in search: built-in is fine for ad-hoc, small-scope lookups; this extension targets **frequent symbol and full-text search**, with sub-second results common once indexing is warm. See [README_Dev.md — Indexing & search algorithm](README_Dev.md#索引与搜索算法).
 
+## AI Agent / MCP Support
+
+Ace Code Search includes a standalone, **read-only stdio MCP server** so Cursor, VS Code/Copilot, and other AI agents can query existing SQLite FTS indexes instead of repeatedly scanning large codebases with `grep`/`rg`.
+
+### MCP tools
+
+| Tool | Purpose |
+| --- | --- |
+| `list_indexes` | List auto-discovered or explicitly configured indexes, roots, token counts, and completeness |
+| `search_code` | Full-text search with index selection, case, phrase, fuzzy, loose matching, and query filters |
+| `read_indexed_file` | Read a line range from an indexed file snapshot |
+| `find_header_source` | Find indexed C/C++ header/source counterparts |
+
+Key `search_code` parameters:
+
+- `caseSensitive`: exact case matching
+- `phraseSearch`: adjacent multi-word phrase matching
+- `fuzzy`: edit-distance typo tolerance
+- `loose` + `looseGap`: terms in any order within a token span
+- `contextLines` / `maxResults`: returned context and result cap
+- Query syntax also supports `ext:`, `file:`, `dir:`, `age:`, `+/-` content filters, and `*` wildcards
+
+There is currently no dedicated strict `wholeWord` parameter; search a complete known identifier as a bare token. If punctuation prevents a match, split it according to tokenization—for example, use `better sqlite3` for `better-sqlite3`.
+
+### Discovery and read-only behavior
+
+- With no arguments, the server auto-discovers Ace Code Search registries in VS Code and Cursor `globalStorage`
+- Use `--registry <registry.json>` or `--db <index.db>` for an explicit source
+- MCP never indexes, starts watchers, or writes databases/registries
+- Results are **index snapshots**; use direct reads or `rg` when `partialIndex: true`, unsaved changes matter, content is not indexed yet, or files are excluded
+
+```bash
+npm run mcp
+npm run mcp -- --db /path/to/index.db
+npm run mcp -- --registry /path/to/registry.json
+```
+
+### Skill and search-preference guidance
+
+On activation, the extension installs or updates:
+
+- Canonical Skill: `~/.agents/skills/ace-code-search-mcp`
+- Cursor compatibility mirror: `~/.cursor/skills/ace-code-search-mcp`
+- VS Code/Copilot compatibility mirror: `~/.copilot/skills/ace-code-search-mcp`
+- VS Code personal Instruction: `~/.copilot/instructions/ace-code-search.instructions.md`
+
+The Instruction/Rule prefers Ace Code Search MCP when a matching index exists, but falls back to `rg`/filesystem search when the index is missing, incomplete, stale, or excludes the target. Cursor only supports personal User Rules through its settings UI, so the extension offers a one-time prompt to copy the recommended rule.
+
+Commands:
+
+- **Ace Code Search: Install Agent Skill and Search Guidance** (search toolbar document-check icon, or command palette)
+- **Ace Code Search: Copy Cursor User Rule**
+
+> Skill/Rule distribution and MCP server registration are separate. The agent client must still register the MCP server; Cursor's personal config is `~/.cursor/mcp.json`. See [README_Dev.md — MCP (AI Agent)](README_Dev.md#mcp-ai-agent) for a complete configuration example.
+
 ## Feature List
 
 ✅ = implemented.
@@ -94,6 +149,8 @@ Compared to built-in search: built-in is fine for ad-hoc, small-scope lookups; t
 | | Index management (create / delete / move / rename) | ✅ Dedicated management panel (editor tab) |
 | | `code-search.autocreate` config file | ✅ JSON auto-create |
 | | Ace Code Search CLI | ✅ `npm run cli` / `ess.bat` |
+| **AI Agent** | Read-only stdio MCP | ✅ Index discovery, search, snapshot reads, header/source pairing |
+| | Skill / search-preference guidance | ✅ Cursor + VS Code/Copilot |
 | **Search** | Single / multi-word / phrase | ✅ |
 | | Wildcard `*` (word-level) | ✅ |
 | | Wildcards (inline / cross-line) `"this * that"` / `"this *:100 that"` | ✅ |
@@ -136,6 +193,7 @@ Legend: ✅ Done · 🟡 Partial · ⬜ Planned
 | Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | Command palette |
 | Manage Indexes | Toolbar ⚙ |
+| Install Agent Skill / Rule | Toolbar document-check icon / command palette |
 | Show Class Inheritance Tree | Toolbar hierarchy icon / command palette |
 | Open Secondary Index | Command palette |
 
@@ -147,6 +205,8 @@ build.bat
 安装CodeSearch.bat
 ```
 
-macOS / Linux: `./install.sh` → `./build.sh` → `./install-extension.sh`
+macOS / Linux: `chmod +x install.sh build.sh install-extension.sh bump-version.sh`, then `./install.sh` → `./build.sh` → `./install-extension.sh`.
+
+See [AI Agent / MCP Support](#ai-agent--mcp-support) above for tools, search parameters, and Skill/Rule installation.
 
 For configuration, Phase 2/3 usage, and CLI details, see [README_Dev.md](README_Dev.md) and [PHASE2.md](PHASE2.md).

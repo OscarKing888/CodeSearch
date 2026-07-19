@@ -2,7 +2,7 @@
   "name": "ace-code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -94,6 +94,14 @@
       {
         "command": "codeSearch.openProfileLogFolder",
         "title": "Ace Code Search: Open Profile Log Folder"
+      },
+      {
+        "command": "codeSearch.installAgentSkill",
+        "title": "Ace Code Search: Install Agent Skill and Search Guidance"
+      },
+      {
+        "command": "codeSearch.copyCursorUserRule",
+        "title": "Ace Code Search: Copy Cursor User Rule"
       },
       {
         "command": "codeSearch.openSecondaryIndex",
@@ -328,22 +336,10 @@
             9,
             10,
             11,
-            12,
-            13,
-            14,
-            15,
-            16,
-            17,
-            18,
-            19,
-            20,
-            21,
-            22,
-            23,
-            24
+            12
           ],
           "enumItemLabels": [
-            "自动（本机 24 线程）",
+            "自动（本机 12 线程）",
             "1 线程",
             "2 线程",
             "3 线程",
@@ -355,21 +351,9 @@
             "9 线程",
             "10 线程",
             "11 线程",
-            "12 线程",
-            "13 线程",
-            "14 线程",
-            "15 线程",
-            "16 线程",
-            "17 线程",
-            "18 线程",
-            "19 线程",
-            "20 线程",
-            "21 线程",
-            "22 线程",
-            "23 线程",
-            "24 线程（全部）"
+            "12 线程（全部）"
           ],
-          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (24 detected at build time; runtime auto always uses live CPU count)."
+          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (12 detected at build time; runtime auto always uses live CPU count)."
         }
       }
     }
@@ -385,27 +369,30 @@
     "validate:native": "node scripts/validate-native-artifacts.js",
     "version:bump": "node scripts/bump-version.js",
     "package": "vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
-    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts && npx ts-node test/classHierarchy.test.ts && npx ts-node test/classHierarchyCacheStore.test.ts && npx ts-node test/classHierarchyWorkerPool.test.ts && npx ts-node test/classHierarchyTreeState.test.ts && npx ts-node test/classHierarchyCacheManager.test.ts",
+    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts && npx ts-node test/classHierarchy.test.ts && npx ts-node test/classHierarchyCacheStore.test.ts && npx ts-node test/classHierarchyWorkerPool.test.ts && npx ts-node test/classHierarchyTreeState.test.ts && npx ts-node test/classHierarchyCacheManager.test.ts && npx ts-node test/mcpTools.test.ts && npx ts-node test/agentSkillInstaller.test.ts && npx ts-node test/agentRuleInstaller.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
-    "cli": "node dist/cli.js"
+    "cli": "node dist/cli.js",
+    "mcp": "node dist/mcp.js"
   },
   "bin": {
     "ess": "dist/cli.js"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.8.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.2",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
     "chokidar": "^4.0.3",
     "esbuild": "^0.24.2",
     "minimatch": "^10.0.1",
     "sharp": "^0.35.3",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.2",
-    "@vscode/vsce": "^3.7.1"
+    "typescript": "^5.7.2"
   }
 }

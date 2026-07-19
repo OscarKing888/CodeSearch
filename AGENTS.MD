@@ -59,8 +59,9 @@
 
 - `安装CodeSearch.bat` / `install-extension.sh` uninstall `OscarKing888.ace-code-search` (and lowercase `oscarking888.ace-code-search`) before installing the local `.vsix`. Marketplace installs block `--force` alone; uninstall first is required to replace them.
 - Both scripts also delete leftover `oscarking888.ace-code-search-*` folders under `%USERPROFILE%\.vscode\extensions` and `%USERPROFILE%\.cursor\extensions`. CLI uninstall alone does not remove old version directories; stale folders can leave the UI on an older version.
-- Install picks the VSIX matching `package.json` version (not merely the newest file by date), then verifies `code --list-extensions --show-versions` reports the expected version.
-- `build.bat` ends by calling `安装CodeSearch.bat` after packaging.
+- Install picks the VSIX matching `package.json` version only (no newest-by-date fallback), then verifies `code`/`cursor --list-extensions --show-versions`. `install-extension.sh` is Bash 3.2 compatible (no `mapfile`). Target `all` skips missing editor CLIs and succeeds if at least one editor installs; explicit `vscode`/`cursor` still fail hard when that CLI is missing or install fails.
+- On macOS/Linux, shell entrypoints should be executable: `chmod +x install.sh build.sh install-extension.sh bump-version.sh` (git mode `100755`).
+- `build.bat` ends by calling `安装CodeSearch.bat` after packaging. `build.sh` uses `npm run package`, then restores system Node `better-sqlite3` for CLI/MCP.
 
 ## Version bump checklist
 
@@ -75,7 +76,25 @@
   - `npm run version:bump -- 0.2.1 --notes "Fix Electron ABI 146 native packaging."`
 - Windows wrapper for the same command:
   - `bump-version.bat 0.2.1 --notes "Fix Electron ABI 146 native packaging."`
+- macOS / Linux wrapper:
+  - `./bump-version.sh 0.2.1 --notes "Fix Electron ABI 146 native packaging."`
 - The script updates `package.json`, `package-lock.json`, and inserts a new top changelog section if it does not already exist. It does not commit, tag, build, or publish.
+
+## MCP server (AI agents)
+
+- Read-only stdio MCP lives in `src/mcp/` and builds to `dist/mcp.js` (`npm run mcp`).
+- Tools: `list_indexes`, `search_code`, `read_indexed_file`, `find_header_source`.
+- Discovery: `--db`, `--registry`, or auto-find VS Code/Cursor `globalStorage/.../code-search/registry.json`.
+- Opens indexes read-only; does not index, watch, or write `registry.json`. Results are index snapshots (directory mappings applied to `localPath`).
+- Uses system Node `better-sqlite3` (do **not** force Electron `native/` via `configureBetterSqlite3` unless `--extension-root` is intentional). After Electron rebuilds, run `npm run rebuild:node` (or use `build.sh`, which restores Node ABI at the end).
+- Coverage: `test/mcpTools.test.ts` (handlers + discovery + path mapping).
+- `dist/cli.js` / `dist/mcp.js` shebang comes only from the esbuild `banner` — do not also put `#!/usr/bin/env node` in the TypeScript entry (double shebang breaks `node dist/*.js`).
+- Project skill `.cursor/skills/ace-code-search-mcp/SKILL.md` teaches agents to choose an index and use case, phrase, fuzzy, loose, wildcard, and filter options. Keep it aligned with `src/mcp/server.ts` schemas and `src/search/QueryParser.ts`; there is currently no strict `wholeWord` MCP parameter.
+- `src/agentSkillInstaller.ts` installs the packaged template from `resources/skills/ace-code-search-mcp/SKILL.md` into the canonical personal path `~/.agents/skills/ace-code-search-mcp` (official Cursor/VS Code user skill root), then mirrors it into compatibility wrappers at `~/.cursor/skills/ace-code-search-mcp` and `~/.copilot/skills/ace-code-search-mcp`. New wrappers are managed copies because official docs do not guarantee symlink discovery; an already-correct existing symlink/junction is left alone. Never overwrite an unmanaged existing skill/link.
+- Activation installs/updates the Skill silently; command `codeSearch.installAgentSkill` reports the result for manual repair. The search toolbar button `#btnInstallGuidance` (document-with-check SVG) posts `installAgentGuidance` and runs the same command. Keep the packaged template byte-identical to `.cursor/skills/ace-code-search-mcp/SKILL.md`; `test/agentSkillInstaller.test.ts` checks installer upgrades, conflicts, wrappers, and template parity. MCP client config remains separate (`~/.cursor/mcp.json` for Cursor personal MCP).
+- Search preference guidance is `.cursor/rules/ace-code-search-first.mdc` for this project and `resources/rules/ace-code-search.instructions.md` for the managed VS Code personal instruction at `~/.copilot/instructions/`. Cursor has no supported file path for User Rules; `resources/rules/cursor-user-rule.txt` is offered through a one-time copy prompt and command `codeSearch.copyCursorUserRule`. Do not write invented `~/.cursor/rules` global files.
+- Maintainer rule `.cursor/rules/mcp-feature-parity.mdc` (`alwaysApply: true`): when adding searchable product features, update MCP tools/schemas, `test/mcpTools.test.ts`, Skill templates, and guidance docs in the same change; document intentional MCP exclusions. Do not ship agent-facing panel/CLI search behavior without MCP discovery unless explicitly scoped out.
+- `src/agentRuleInstaller.ts` updates only its marked VS Code instruction and preserves unmanaged conflicts. Coverage: `test/agentRuleInstaller.test.ts`.
 
 ## Search panel webview UI
 
@@ -110,7 +129,7 @@
 
 ## Class inheritance tree panel
 
-- The search toolbar hierarchy button is an inline SVG and is always enabled; it opens the workspace-wide indexed tree without requiring a search. The context-lines toggle is also an inline SVG but must retain `#contextLineCount`; update that span instead of replacing the button's `textContent`.
+- The search toolbar hierarchy button is an inline SVG and is always enabled; it opens the workspace-wide indexed tree without requiring a search. The context-lines toggle is also an inline SVG but must retain `#contextLineCount`; update that span instead of replacing the button's `textContent`. `#btnInstallGuidance` installs/repairs Agent Skill + VS Code instruction via `codeSearch.installAgentSkill` (Cursor may prompt to copy the User Rule).
 - `src/hierarchy/classHierarchyCacheStore.ts` owns the disposable `class_hierarchy_files`, `class_hierarchy_declarations`, and `class_hierarchy_bases` tables. Writable indexes create/migrate this schema idempotently; read-only/legacy secondary indexes are feature-detected without writes and fall back to an in-memory parse. Content-update/delete triggers hide or remove stale cache rows, and parser/mtime/size/fingerprint checks prevent stale commits.
 - `CLASS_HIERARCHY_SOURCE_EXTENSIONS` includes `cs`, while the full-text scanner already indexes `.cs` as text. Parser version 2 adds C# declaration extraction, so existing hierarchy caches intentionally reparse in idle/background work before persisting the merged result.
 - Increment `DEFAULT_CLASS_HIERARCHY_PARSER_VERSION` whenever extraction or stored declaration/base semantics change after release; mismatched markers are intentionally treated as pending files.

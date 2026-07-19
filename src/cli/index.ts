@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Ace Code Search CLI (ess) — index management from command line
  * Usage:

@@ -11,13 +11,10 @@ EXPECTED_VER="$(node -p "require('./package.json').version")"
 VSIX="$SCRIPT_DIR/$(node -p "require('./package.json').name + '-' + require('./package.json').version + '.vsix'")"
 
 if [[ ! -f "$VSIX" ]]; then
-  mapfile -t VSIX_FILES < <(ls -t "$SCRIPT_DIR"/*.vsix 2>/dev/null || true)
-  if [[ ${#VSIX_FILES[@]} -eq 0 ]]; then
-    echo "[ERROR] No .vsix file found in this directory."
-    echo "        Run ./build.sh first to generate the package."
-    exit 1
-  fi
-  VSIX="${VSIX_FILES[0]}"
+  echo "[ERROR] Expected VSIX not found: $(basename "$VSIX")"
+  echo "        Run ./build.sh first so package.json version matches the package file."
+  echo "        Refusing to fall back to a differently versioned .vsix."
+  exit 1
 fi
 
 echo "========================================"
@@ -35,6 +32,19 @@ purge_extension_dirs() {
   for dir in "$ext_root"/oscarking888.ace-code-search-* "$ext_root"/OscarKing888.ace-code-search-*; do
     [[ -d "$dir" ]] || continue
     echo "  Removing old folder: $(basename "$dir")"
+    rm -rf "$dir"
+  done
+}
+
+purge_stale_extension_dirs() {
+  local ext_root="$1"
+  local keep_ver="$2"
+  local dir
+  [[ -d "$ext_root" ]] || return 0
+  for dir in "$ext_root"/oscarking888.ace-code-search-* "$ext_root"/OscarKing888.ace-code-search-*; do
+    [[ -d "$dir" ]] || continue
+    [[ "$(basename "$dir")" == *"-$keep_ver" ]] && continue
+    echo "  Removing stale folder: $(basename "$dir")"
     rm -rf "$dir"
   done
 }
@@ -68,23 +78,10 @@ install_to_editor() {
   purge_stale_extension_dirs "$ext_root" "$EXPECTED_VER"
 }
 
-purge_stale_extension_dirs() {
-  local ext_root="$1"
-  local keep_ver="$2"
-  local dir
-  [[ -d "$ext_root" ]] || return 0
-  for dir in "$ext_root"/oscarking888.ace-code-search-* "$ext_root"/OscarKing888.ace-code-search-*; do
-    [[ -d "$dir" ]] || continue
-    [[ "$(basename "$dir")" == *"-$keep_ver" ]] && continue
-    echo "  Removing stale folder: $(basename "$dir")"
-    rm -rf "$dir"
-  done
-}
-
 install_vscode() {
   if ! command -v code >/dev/null 2>&1; then
     echo "[SKIP] VS Code CLI (code) not found in PATH."
-    return 1
+    return 2
   fi
   echo "Installing to VS Code..."
   install_to_editor code "${HOME}/.vscode/extensions" "VS Code"
@@ -93,42 +90,73 @@ install_vscode() {
 install_cursor() {
   if ! command -v cursor >/dev/null 2>&1; then
     echo "[SKIP] Cursor CLI (cursor) not found in PATH."
-    return 1
+    return 2
   fi
   echo "Installing to Cursor..."
   install_to_editor cursor "${HOME}/.cursor/extensions" "Cursor"
 }
 
+# Return codes from install_* :
+# 0 = success, 1 = install/verify failed, 2 = CLI missing (skip)
 INSTALLED=0
 FAILED=0
+SKIPPED=0
+
+run_target() {
+  local fn="$1"
+  local status=0
+  set +e
+  "$fn"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    INSTALLED=1
+  elif [[ "$status" -eq 2 ]]; then
+    SKIPPED=1
+  else
+    FAILED=1
+  fi
+}
 
 case "$TARGET" in
   all)
-    install_vscode && INSTALLED=1 || FAILED=1
-    install_cursor && INSTALLED=1 || FAILED=1
+    run_target install_vscode
+    run_target install_cursor
     ;;
   vscode)
-    install_vscode && INSTALLED=1 || FAILED=1
+    run_target install_vscode
     ;;
   cursor)
-    install_cursor && INSTALLED=1 || FAILED=1
+    run_target install_cursor
     ;;
   *)
     echo "[ERROR] Unknown target: $TARGET"
-    echo "       Usage: ./install-extension.sh [vscode|cursor|all]"
+    echo "        Usage: ./install-extension.sh [vscode|cursor|all]"
     exit 1
     ;;
 esac
 
 if [[ "$INSTALLED" -eq 0 ]]; then
   echo
-  echo "[ERROR] No editor CLI found. Add one of these to PATH:"
-  echo "  VS Code:  Command Palette -> \"Shell Command: Install 'code' command in PATH\""
-  echo "  Cursor:   Command Palette -> \"Shell Command: Install 'cursor' command in PATH\""
+  if [[ "$TARGET" == "all" && "$SKIPPED" -ne 0 && "$FAILED" -eq 0 ]]; then
+    echo "[ERROR] No editor CLI found. Add one of these to PATH:"
+    echo "  VS Code:  Command Palette -> \"Shell Command: Install 'code' command in PATH\""
+    echo "  Cursor:   Command Palette -> \"Shell Command: Install 'cursor' command in PATH\""
+  elif [[ "$FAILED" -ne 0 ]]; then
+    echo "[ERROR] Install failed for target: $TARGET"
+  else
+    echo "[ERROR] No editor CLI found for target: $TARGET"
+  fi
   exit 1
 fi
 
-if [[ "$FAILED" -ne 0 ]]; then
+if [[ "$TARGET" != "all" && "$FAILED" -ne 0 ]]; then
+  echo
+  echo "[ERROR] Install failed for target: $TARGET"
+  exit 1
+fi
+
+if [[ "$TARGET" == "all" && "$FAILED" -ne 0 ]]; then
   echo
   echo "[ERROR] At least one editor install failed."
   exit 1

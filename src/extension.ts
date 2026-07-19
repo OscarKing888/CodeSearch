@@ -19,9 +19,16 @@ import { getLogicalCpuCount } from './index/threadCount';
 import { switchHeaderSource as runSwitchHeaderSource } from './pairing/switchHeaderSource';
 import { migrateUserHeaderSourceKeybindings } from './pairing/migrateHeaderSourceKeybindings';
 import { revealProfileLogFolder } from './utils/searchProfileUi';
+import { installPersonalAgentSkill } from './agentSkillInstaller';
+import {
+  installVscodePersonalInstruction,
+  readCursorUserRule,
+} from './agentRuleInstaller';
 
 const CREATE_INDEX_LABEL = 'Create Index';
 const SKIP_INDEX_LABEL = 'Not Now';
+const CURSOR_USER_RULE_PROMPT_VERSION_KEY =
+  'codeSearch.cursorUserRulePromptVersion';
 
 const INDEXING_CONFIG_KEYS = [
   'codeSearch.excludeGlobs',
@@ -58,6 +65,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   extensionContext = context;
   logCpuInfo(context);
   registerCommands(context);
+  void installAgentSkill(context, false);
   void migrateUserHeaderSourceKeybindings(resolveEditorProduct(), (message) =>
     outputChannel?.appendLine(message)
   );
@@ -141,6 +149,12 @@ function registerCommands(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('codeSearch.openProfileLogFolder', () => {
       void revealProfileLogFolder(context);
     }),
+    vscode.commands.registerCommand('codeSearch.installAgentSkill', () => {
+      void installAgentSkill(context, true);
+    }),
+    vscode.commands.registerCommand('codeSearch.copyCursorUserRule', () => {
+      void copyCursorUserRule(context);
+    }),
     vscode.commands.registerCommand('codeSearch.openSecondaryIndex', async () => {
       if (!(await ensureWorkspaceReady()) || !indexManager) {
         return;
@@ -166,6 +180,115 @@ function registerCommands(context: vscode.ExtensionContext): void {
       void switchHeaderSource();
     })
   );
+}
+
+async function installAgentSkill(
+  context: vscode.ExtensionContext,
+  notify: boolean
+): Promise<void> {
+  try {
+    const version = String(context.extension.packageJSON.version ?? '0.0.0');
+    const result = await installPersonalAgentSkill({
+      extensionRoot: context.extensionPath,
+      version,
+    });
+    const vscodeInstruction = await installVscodePersonalInstruction({
+      extensionRoot: context.extensionPath,
+      version,
+    });
+    for (const item of result.paths) {
+      outputChannel?.appendLine(
+        `Agent Skill ${item.client}: ${item.mode} ${item.path}` +
+          (item.changed ? ' (updated)' : '')
+      );
+    }
+    for (const warning of result.warnings) {
+      outputChannel?.appendLine(`Agent Skill warning: ${warning}`);
+    }
+    outputChannel?.appendLine(
+      `VS Code personal instruction: ${vscodeInstruction.path}` +
+        (vscodeInstruction.changed ? ' (updated)' : '')
+    );
+    if (vscodeInstruction.warning) {
+      outputChannel?.appendLine(
+        `VS Code personal instruction warning: ${vscodeInstruction.warning}`
+      );
+    }
+
+    const warnings = [
+      ...result.warnings,
+      ...(vscodeInstruction.warning ? [vscodeInstruction.warning] : []),
+    ];
+    if (resolveEditorProduct() === 'Cursor') {
+      const promptedVersion = context.globalState.get<string>(
+        CURSOR_USER_RULE_PROMPT_VERSION_KEY
+      );
+      if (notify || (result.changed && promptedVersion !== version)) {
+        await promptCursorUserRule(context, version, warnings);
+        return;
+      }
+    }
+
+    if (notify) {
+      if (warnings.length > 0) {
+        void vscode.window.showWarningMessage(
+          `Ace Code Search: Agent guidance installed with warnings — ${warnings.join(' ')}`
+        );
+      } else {
+        void vscode.window.showInformationMessage(
+          `Ace Code Search: Agent Skill and VS Code search instruction installed at ${result.canonicalPath}`
+        );
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    outputChannel?.appendLine(`Agent Skill install failed: ${message}`);
+    if (notify) {
+      void vscode.window.showErrorMessage(
+        `Ace Code Search: Failed to install Agent guidance — ${message}`
+      );
+    }
+  }
+}
+
+async function promptCursorUserRule(
+  context: vscode.ExtensionContext,
+  version: string,
+  warnings: string[]
+): Promise<void> {
+  const copyLabel = 'Copy Cursor User Rule';
+  const message =
+    warnings.length > 0
+      ? `Ace Code Search: Agent guidance installed with warnings — ${warnings.join(' ')}`
+      : 'Ace Code Search: Skill installed. Cursor requires User Rules to be added from Settings; copy the recommended rule now?';
+  const selected = warnings.length > 0
+    ? await vscode.window.showWarningMessage(message, copyLabel)
+    : await vscode.window.showInformationMessage(message, copyLabel);
+  await context.globalState.update(
+    CURSOR_USER_RULE_PROMPT_VERSION_KEY,
+    version
+  );
+  if (selected === copyLabel) {
+    await copyCursorUserRule(context);
+  }
+}
+
+async function copyCursorUserRule(
+  context: vscode.ExtensionContext
+): Promise<void> {
+  try {
+    const rule = (await readCursorUserRule(context.extensionPath)).trim();
+    await vscode.env.clipboard.writeText(rule);
+    void vscode.window.showInformationMessage(
+      'Ace Code Search: Cursor User Rule copied. Paste it into Cursor Settings → Rules → User Rules.'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    outputChannel?.appendLine(`Copy Cursor User Rule failed: ${message}`);
+    void vscode.window.showErrorMessage(
+      `Ace Code Search: Failed to copy Cursor User Rule — ${message}`
+    );
+  }
 }
 
 async function initializeWorkspace(context: vscode.ExtensionContext): Promise<void> {

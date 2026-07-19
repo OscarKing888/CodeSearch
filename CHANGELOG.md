@@ -7,6 +7,10 @@ All notable changes to the Ace Code Search extension are documented in this file
 ### Added
 - Add a workspace-wide C++/UE class inheritance panel that opens without a prior search, caches declarations incrementally in each writable index, and preserves read-only legacy-index compatibility through an in-memory fallback.
 - Add hierarchy/context SVG toolbar icons, filter-clear selection reveal, and subclass expand/collapse actions in the class-row context menu.
+- Install the Ace Code Search MCP Agent Skill for both Cursor and VS Code/Copilot from one managed `~/.agents/skills` copy, with client-specific compatibility wrappers and a manual repair command.
+- Add always-on guidance to prefer indexed Ace Code Search for code discovery, with a managed VS Code personal Instruction and a copy helper for Cursor User Rules.
+- Add a search toolbar button that installs/repairs the Agent Skill and search guidance (and prompts to copy the Cursor User Rule when needed).
+- Add project maintainer rule `.cursor/rules/mcp-feature-parity.mdc` so searchable feature work keeps MCP tools, Skill templates, and guidance docs in sync.
 
 ### Fixed
 - Prevent `Maximum call stack size exceeded` in large class hierarchies by removing unbounded array-spread calls and using iterative filter/render graph traversal.
@@ -16,6 +20,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 
 ### Changed
 - Show loaded versus discovered hit counts while streaming and keep search profiling disabled by default.
+
+## [0.7.0] - 2026-07-19
+
+### Changed
+- add MCP & skills/rules
 
 ## [0.6.2] - 2026-07-14
 

@@ -36,6 +36,18 @@ const cliOptions = {
   sourcemap: true,
 };
 
+const mcpOptions = {
+  entryPoints: ['src/mcp/server.ts'],
+  bundle: true,
+  outfile: 'dist/mcp.js',
+  banner: { js: '#!/usr/bin/env node' },
+  external: ['better-sqlite3'],
+  format: 'cjs',
+  platform: 'node',
+  target: 'node18',
+  sourcemap: true,
+};
+
 const webviewOptions = {
   entryPoints: ['src/ui/webview/main.ts'],
   bundle: true,
@@ -86,6 +98,7 @@ async function build() {
   fs.mkdirSync('dist/workers', { recursive: true });
   await esbuild.build(extOptions);
   await esbuild.build(cliOptions);
+  await esbuild.build(mcpOptions);
   await esbuild.build(webviewOptions);
   await esbuild.build(manageWebviewOptions);
   await esbuild.build(classHierarchyWebviewOptions);
@@ -99,12 +112,14 @@ async function watchBuild() {
   fs.mkdirSync('dist/workers', { recursive: true });
   const extCtx = await esbuild.context(extOptions);
   const cliCtx = await esbuild.context(cliOptions);
+  const mcpCtx = await esbuild.context(mcpOptions);
   const webCtx = await esbuild.context(webviewOptions);
   const manageCtx = await esbuild.context(manageWebviewOptions);
   const classHierarchyCtx = await esbuild.context(classHierarchyWebviewOptions);
   const classHierarchyWorkerCtx = await esbuild.context(classHierarchyWorkerOptions);
   await extCtx.watch();
   await cliCtx.watch();
+  await mcpCtx.watch();
   await webCtx.watch();
   await manageCtx.watch();
   await classHierarchyCtx.watch();

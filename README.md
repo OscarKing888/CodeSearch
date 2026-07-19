@@ -73,6 +73,61 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 
 与 VS Code 内置搜索对比：内置搜索适合临时、小范围查找；本扩展适合**频繁符号/全文检索**，索引完成后常见查询可在亚秒级返回。算法细节见 [README_Dev.md — 索引与搜索算法](README_Dev.md#索引与搜索算法)。
 
+## AI Agent / MCP 支持
+
+Ace Code Search 提供独立的**只读 stdio MCP Server**，让 Cursor、VS Code/Copilot 等 AI Agent 直接查询已有 SQLite FTS 索引，避免每次用 `grep`/`rg` 全盘扫描大型代码库。
+
+### MCP 工具
+
+| 工具 | 用途 |
+| --- | --- |
+| `list_indexes` | 列出自动发现或显式配置的索引、根目录、token 数与完整状态 |
+| `search_code` | 全文搜索，支持索引选择、大小写、短语、模糊、松散匹配及查询过滤器 |
+| `read_indexed_file` | 按行范围读取索引中的文件快照 |
+| `find_header_source` | 使用索引查找 C/C++ 头文件/源文件配对 |
+
+`search_code` 的主要参数：
+
+- `caseSensitive`：大小写敏感
+- `phraseSearch`：多词连续短语匹配
+- `fuzzy`：基于编辑距离的拼写容错
+- `loose` + `looseGap`：若干 token 范围内任意顺序匹配
+- `contextLines` / `maxResults`：上下文行与结果上限
+- 查询语法仍支持 `ext:`、`file:`、`dir:`、`age:`、`+/-` 内容过滤及 `*` 通配符
+
+当前没有独立的严格 `wholeWord` 参数；已知标识符应直接搜索完整 token。包含连字符等标点的名称若无结果，可按 tokenizer 拆词，例如用 `better sqlite3` 搜索 `better-sqlite3`。
+
+### 索引发现与只读保证
+
+- 无参数启动时自动发现 VS Code 与 Cursor `globalStorage` 中的 Ace Code Search registry
+- 也可显式传入 `--registry <registry.json>` 或 `--db <index.db>`
+- MCP 不建立索引、不启动 watcher、不写数据库或 registry
+- 返回内容是**索引快照**；`partialIndex: true`、未保存修改、尚未入库或被排除文件需要回退到直接读文件/`rg`
+
+```bash
+npm run mcp
+npm run mcp -- --db /path/to/index.db
+npm run mcp -- --registry /path/to/registry.json
+```
+
+### Skill 与搜索优先规则
+
+扩展激活时会自动安装/更新：
+
+- 规范 Skill：`~/.agents/skills/ace-code-search-mcp`
+- Cursor Skill 兼容镜像：`~/.cursor/skills/ace-code-search-mcp`
+- VS Code/Copilot Skill 兼容镜像：`~/.copilot/skills/ace-code-search-mcp`
+- VS Code 个人 Instruction：`~/.copilot/instructions/ace-code-search.instructions.md`
+
+Instruction/Rule 会建议：有匹配索引时优先使用 Ace Code Search MCP；无索引、索引可能不完整/过期或文件未入库时再回退 `rg`/文件系统搜索。Cursor 的个人 User Rules 只能通过设置 UI 管理，因此扩展首次更新时会提示复制推荐规则。
+
+可用命令：
+
+- **Ace Code Search: Install Agent Skill and Search Guidance**（搜索工具栏文档勾选图标，或命令面板）
+- **Ace Code Search: Copy Cursor User Rule**
+
+> Skill/Rule 分发与 MCP Server 注册是两件事。Agent 客户端仍需配置 MCP Server；Cursor 的个人配置位于 `~/.cursor/mcp.json`。完整配置示例见 [README_Dev.md — MCP (AI Agent)](README_Dev.md#mcp-ai-agent)。
+
 ## 功能清单
 
 ✅ 表示已实现。
@@ -94,6 +149,8 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 | | 索引管理（创建 / 删除 / 移动 / 重命名） | ✅ 专属管理面板（编辑器标签页） |
 | | `code-search.autocreate` 配置文件 | ✅ JSON 自动创建 |
 | | Ace Code Search CLI | ✅ `npm run cli` / `ess.bat` |
+| **AI Agent** | 只读 stdio MCP | ✅ 索引发现、搜索、快照读取、头源配对 |
+| | Skill / 搜索优先规则分发 | ✅ Cursor + VS Code/Copilot |
 | **搜索** | 单词 / 多词 / 短语 | ✅ |
 | | 通配符 `*`（单词级） | ✅ |
 | | 通配符（行内 / 跨行）`"this * that"` / `"this *:100 that"` | ✅ |
@@ -136,6 +193,7 @@ Ace Code Search 采用**预索引 + 持久化全文检索**，在大仓库中重
 | Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | 命令面板 |
 | Manage Indexes | 工具栏 ⚙ |
+| Install Agent Skill / Rule | 工具栏文档勾选图标 / 命令面板 |
 | Show Class Inheritance Tree | 工具栏继承树图标 / 命令面板 |
 | Open Secondary Index | 命令面板 |
 
@@ -147,6 +205,8 @@ build.bat
 安装CodeSearch.bat
 ```
 
-macOS / Linux：`./install.sh` → `./build.sh` → `./install-extension.sh`
+macOS / Linux：`chmod +x install.sh build.sh install-extension.sh bump-version.sh`，然后 `./install.sh` → `./build.sh` → `./install-extension.sh`。
+
+AI Agent / MCP 的工具、搜索参数和 Skill/Rule 安装方式见上方 [AI Agent / MCP 支持](#ai-agent--mcp-支持)。
 
 更多配置、Phase 2/3 用法与 CLI 说明见 [README_Dev.md](README_Dev.md)、[PHASE2.md](PHASE2.md)。

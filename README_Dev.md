@@ -10,9 +10,16 @@ build.bat     REM 编译、测试并打包 .vsix
 ### macOS / Linux
 
 ```bash
-chmod +x install.sh build.sh
+chmod +x install.sh build.sh install-extension.sh bump-version.sh
 ./install.sh
 ./build.sh
+./install-extension.sh
+```
+
+Version bump (same as `bump-version.bat`):
+
+```bash
+./bump-version.sh 0.2.1 --notes "Fix Electron ABI 146 native packaging."
 ```
 
 ### 手动命令
@@ -20,8 +27,63 @@ chmod +x install.sh build.sh
 ```bash
 npm install
 npm run build
+npm run rebuild:node   # CLI / MCP need system Node ABI for better-sqlite3
 # Press F5 in VS Code with launch.json
 ```
+
+### MCP (AI Agent)
+
+Read-only stdio MCP server over existing Ace Code Search SQLite indexes:
+
+```bash
+npm run build
+npm run rebuild:node
+npm run mcp -- --db /path/to/index.db
+# or: npm run mcp -- --registry /path/to/registry.json
+# or: npm run mcp   # auto-discovers VS Code/Cursor globalStorage registries
+```
+
+Cursor / Claude Desktop example (`mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "ace-code-search": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/CodeSearch/dist/mcp.js",
+        "--registry",
+        "/absolute/path/to/registry.json"
+      ]
+    }
+  }
+}
+```
+
+Tools: `list_indexes`, `search_code`, `read_indexed_file`, `find_header_source`.
+Results come from the **index snapshot** (not a live filesystem walk). MCP uses the **system Node** `better-sqlite3` build (`npm run rebuild:node`); after `rebuild-electron` / packaging, `build.sh` restores it automatically.
+
+#### Personal Agent Skill installation
+
+The extension installs the packaged `ace-code-search-mcp` Skill automatically on activation:
+
+- Canonical managed copy: `~/.agents/skills/ace-code-search-mcp` (official Cursor and VS Code/Copilot personal skill root)
+- Cursor compatibility wrapper: `~/.cursor/skills/ace-code-search-mcp`
+- VS Code / GitHub Copilot compatibility wrapper: `~/.copilot/skills/ace-code-search-mcp`
+
+New wrappers are managed mirrors that refresh with extension upgrades. Official docs do not guarantee symlink discovery, so the installer no longer creates new symlinks/junctions; an already-correct existing link is left alone. Existing unmanaged files or links are never overwritten; check the **Ace Code Search** output channel for a warning, remove/rename the conflicting directory, then run **Ace Code Search: Install Agent Skill for Cursor and VS Code** from the command palette.
+
+The packaged source is `resources/skills/ace-code-search-mcp/SKILL.md`. Keep it byte-for-byte aligned with the repository's own `.cursor/skills/ace-code-search-mcp/SKILL.md`; `test/agentSkillInstaller.test.ts` enforces this. MCP server registration is separate from Skill install (for Cursor, personal MCP config is `~/.cursor/mcp.json`).
+
+#### Prefer-indexed-search guidance
+
+- Project Cursor Rule: `.cursor/rules/ace-code-search-first.mdc` (`alwaysApply: true`).
+- VS Code personal Instruction: installed automatically at `~/.copilot/instructions/ace-code-search.instructions.md` from `resources/rules/ace-code-search.instructions.md`.
+- Cursor User Rule: Cursor officially stores this in **Cursor Settings → Rules → User Rules**, not in a supported file path. On first install/update the extension offers **Copy Cursor User Rule**; the same action is always available as the **Ace Code Search: Copy Cursor User Rule** command.
+
+The guidance prefers indexed MCP tools for code discovery, but requires `rg`/filesystem/direct-read fallback when no matching index exists, `partialIndex` affects completeness, content may be stale, or files are excluded/unindexed. It never treats indexed snapshots as unsaved content.
+
+`vscode:prepublish` only runs the normal `npm run build` (esbuild). Cross-platform Electron native binaries are produced by `scripts/rebuild-electron.js` and the Release GitHub Actions workflow — not by `vscode:prepublish`.
 
 ## Release
 
@@ -153,6 +215,7 @@ See VS Code Settings → **Ace Code Search** for exclude globs, context lines, p
 - **Autocreate**: add `code-search.autocreate` in workspace root (optional JSON config)
 - **Directory mapping**: map `\\server\share => C:\local` for shared indexes
 - **CLI**: `npm run cli -- create|update|list` (see [PHASE2.md](PHASE2.md))
+- **MCP**: `npm run mcp` — read-only stdio tools for AI agents (see Development → MCP above)
 
 ## Roadmap
 
@@ -225,6 +288,11 @@ flowchart TB
 ├── src/
 │   ├── extension.ts          # 激活、注册命令、生命周期
 │   ├── cli/index.ts          # 独立 CLI（create / update / list）
+│   ├── mcp/                  # 只读 stdio MCP（list/search/read/header-source）
+│   │   ├── server.ts
+│   │   ├── session.ts
+│   │   ├── tools.ts
+│   │   └── discover.ts
 │   ├── index/
 │   │   ├── IndexService.ts   # 建索引、增量更新、状态管理
 │   │   ├── IndexManager.ts   # 多索引注册与管理
@@ -348,7 +416,7 @@ CREATE TABLE tokens (
 
 **3. 语法高亮**: Webview 通过 `postMessage` 获取当前 `colorTheme`，用 `vscode-textmate` 对结果行 tokenize，映射到 CSS class。
 
-**4. native 模块**: `better-sqlite3` 需针对 VS Code 内置 Node 版本预编译；在 `package.json` 的 `vscode:prepublish` 与 GitHub Actions 中处理跨平台 binary。
+**4. native 模块**: `better-sqlite3` 需针对 VS Code/Cursor 内置 Electron ABI 预编译，产物放在 `native/<platform>-<arch>-<abi>/`。本地用 `scripts/rebuild-electron.js`；发布用 GitHub Actions 跨平台构建并合并。`vscode:prepublish` **只**跑普通 esbuild，不负责 native。CLI/MCP 另需 `scripts/rebuild-node.js` 把模块恢复为系统 Node ABI。
 
 **5. 与 VS Code 内置搜索的关系**: 本插件是**补充**而非替代——提供预索引全文搜索体验；不修改内置 Search 面板。
 

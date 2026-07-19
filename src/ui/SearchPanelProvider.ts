@@ -186,6 +186,9 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
         case 'openSettings':
           await vscode.commands.executeCommand('codeSearch.openSettings');
           break;
+        case 'installAgentGuidance':
+          await vscode.commands.executeCommand('codeSearch.installAgentSkill');
+          break;
         case 'setContextLines':
           await this.setUiContextLines(Number(msg.contextLines));
           break;
@@ -1361,6 +1364,13 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       </svg>
     </button>
     <button class="btn" id="btnManage" title="Manage indexes">⚙</button>
+    <button class="btn" id="btnInstallGuidance" title="Install Agent Skill / Rule" aria-label="Install Agent Skill / Rule">
+      <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4.5 2.5h5.2L12.5 5.3V13.5H4.5z"></path>
+        <path d="M9.5 2.5V5.3H12.5"></path>
+        <path d="M6.2 9.2l1.3 1.3 2.3-2.6"></path>
+      </svg>
+    </button>
     <button class="btn" id="btnSettings" title="Open Ace Code Search settings">☰</button>
   </div>
   <div class="status-bar">

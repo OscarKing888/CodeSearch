@@ -105,6 +105,7 @@ const btnCtxMore = document.getElementById('btnCtxMore') as HTMLButtonElement;
 const btnRefresh = document.getElementById('btnRefresh') as HTMLButtonElement;
 const btnHierarchy = document.getElementById('btnHierarchy') as HTMLButtonElement;
 const btnManage = document.getElementById('btnManage') as HTMLButtonElement;
+const btnInstallGuidance = document.getElementById('btnInstallGuidance') as HTMLButtonElement;
 const btnSettings = document.getElementById('btnSettings') as HTMLButtonElement;
 const statusHits = document.getElementById('statusHits') as HTMLSpanElement;
 const statusIndex = document.getElementById('statusIndex') as HTMLSpanElement;
@@ -680,6 +681,9 @@ btnHierarchy.addEventListener('click', () => {
   vscode.postMessage({ type: 'openClassHierarchy' });
 });
 btnManage.addEventListener('click', () => vscode.postMessage({ type: 'manageIndexes' }));
+btnInstallGuidance.addEventListener('click', () => {
+  vscode.postMessage({ type: 'installAgentGuidance' });
+});
 btnSettings.addEventListener('click', () => vscode.postMessage({ type: 'openSettings' }));
 
 function doSearch(forceNewTab: boolean): void {

@@ -38,15 +38,15 @@ echo "      On macOS, native modules require Xcode Command Line Tools."
 echo
 npm install
 
-echo.
+echo
 echo "[2/3] Rebuilding better-sqlite3 for VS Code / Cursor Electron..."
 echo "      (native module must match editor Electron, not system Node.js)"
 node "$SCRIPT_DIR/scripts/rebuild-electron.js" all
 
 echo
-echo "[3/3] Optional: rebuild for CLI on system Node.js"
+echo "[3/3] Optional: rebuild for CLI / MCP on system Node.js"
 echo "      Skip this if you only use the VS Code extension."
-node "$SCRIPT_DIR/scripts/rebuild-node.js" || echo "[WARN] System Node rebuild failed. CLI (ess) may not work; extension is unaffected."
+node "$SCRIPT_DIR/scripts/rebuild-node.js" || echo "[WARN] System Node rebuild failed. CLI/MCP may not work; extension is unaffected."
 
 echo
 echo "========================================"
