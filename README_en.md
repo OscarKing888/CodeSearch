@@ -112,21 +112,26 @@ npm run mcp -- --registry /path/to/registry.json
 
 ### Skill and search-preference guidance
 
-On activation, the extension installs or updates:
+The toolbar **Install project Agent Skill / Rule / MCP** button (or command **Ace Code Search: Install Project Agent Skill, Rule, and MCP Config**) writes:
 
-- Canonical Skill: `~/.agents/skills/ace-code-search-mcp`
-- Cursor compatibility mirror: `~/.cursor/skills/ace-code-search-mcp`
-- VS Code/Copilot compatibility mirror: `~/.copilot/skills/ace-code-search-mcp`
-- VS Code personal Instruction: `~/.copilot/instructions/ace-code-search.instructions.md`
+- Project Skill (Codex): `.agents/skills/ace-code-search-mcp`
+- Project Skill (Cursor): `.cursor/skills/ace-code-search-mcp`
+- Project Rule (Cursor): `.cursor/rules/ace-code-search-first.mdc`
+- Project Instruction (VS Code Copilot): `.github/instructions/ace-code-search.instructions.md`
+- **Codex MCP**: `[mcp_servers.ace-code-search]` in `~/.codex/config.toml` (and project `.codex/config.toml`)
+- **Cursor MCP**: `ace-code-search` in `~/.cursor/mcp.json`
 
-The Instruction/Rule prefers Ace Code Search MCP when a matching index exists, but falls back to `rg`/filesystem search when the index is missing, incomplete, stale, or excludes the target. Cursor only supports personal User Rules through its settings UI, so the extension offers a one-time prompt to copy the recommended rule.
+> A Skill only documents usage. **Without an MCP server registration, the session will not expose** `list_indexes` / `search_code`. After install, restart Codex (or run `/mcp`) and retry.
 
-Commands:
+Commit the Skill/Rule files so the team picks them up. The extension does **not** write them silently on activation.
 
-- **Ace Code Search: Install Agent Skill and Search Guidance** (search toolbar document-check icon, or command palette)
-- **Ace Code Search: Copy Cursor User Rule**
+The Instruction/Rule prefers Ace Code Search MCP when a matching index exists, but falls back to `rg`/filesystem search when the index is missing, incomplete, stale, or excludes the target.
 
-> Skill/Rule distribution and MCP server registration are separate. The agent client must still register the MCP server; Cursor's personal config is `~/.cursor/mcp.json`. See [README_Dev.md — MCP (AI Agent)](README_Dev.md#mcp-ai-agent) for a complete configuration example.
+Optional personal command:
+
+- **Ace Code Search: Copy Cursor User Rule (Personal)** — for Cursor Settings → User Rules only
+
+> Skill/Rule distribution previously required a separate MCP registration step; the toolbar install now also writes Codex/Cursor MCP client config. See [README_Dev.md — MCP (AI Agent)](README_Dev.md#mcp-ai-agent).
 
 ## Feature List
 
@@ -150,7 +155,7 @@ Commands:
 | | `code-search.autocreate` config file | ✅ JSON auto-create |
 | | Ace Code Search CLI | ✅ `npm run cli` / `ess.bat` |
 | **AI Agent** | Read-only stdio MCP | ✅ Index discovery, search, snapshot reads, header/source pairing |
-| | Skill / search-preference guidance | ✅ Cursor + VS Code/Copilot |
+| | Skill / search-preference guidance | ✅ Writes into the current project (Codex `.agents` + Cursor/VS Code) |
 | **Search** | Single / multi-word / phrase | ✅ |
 | | Wildcard `*` (word-level) | ✅ |
 | | Wildcards (inline / cross-line) `"this * that"` / `"this *:100 that"` | ✅ |
@@ -193,7 +198,7 @@ Legend: ✅ Done · 🟡 Partial · ⬜ Planned
 | Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | Command palette |
 | Manage Indexes | Toolbar ⚙ |
-| Install Agent Skill / Rule | Toolbar document-check icon / command palette |
+| Install Agent Skill / Rule | Toolbar document-check icon / command palette (writes into the current project) |
 | Show Class Inheritance Tree | Toolbar hierarchy icon / command palette |
 | Open Secondary Index | Command palette |
 

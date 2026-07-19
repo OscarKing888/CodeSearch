@@ -1364,7 +1364,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       </svg>
     </button>
     <button class="btn" id="btnManage" title="Manage indexes">⚙</button>
-    <button class="btn" id="btnInstallGuidance" title="Install Agent Skill / Rule" aria-label="Install Agent Skill / Rule">
+    <button class="btn" id="btnInstallGuidance" title="Install project Agent Skill / Rule / MCP" aria-label="Install project Agent Skill / Rule / MCP">
       <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M4.5 2.5h5.2L12.5 5.3V13.5H4.5z"></path>
         <path d="M9.5 2.5V5.3H12.5"></path>

@@ -51,35 +51,48 @@ Cursor / Claude Desktop example (`mcp.json`):
     "ace-code-search": {
       "command": "node",
       "args": [
-        "/absolute/path/to/CodeSearch/dist/mcp.js",
-        "--registry",
-        "/absolute/path/to/registry.json"
+        "/absolute/path/to/extension-or-repo/dist/mcp.js"
       ]
     }
   }
 }
 ```
 
+Codex (VS Code extension / CLI / desktop) example (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.ace-code-search]
+command = "node"
+args = ["/absolute/path/to/extension-or-repo/dist/mcp.js"]
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+enabled = true
+```
+
+The toolbar **Install project Agent Skill / Rule / MCP** command writes both of the above (managed blocks) plus project Skill/Rule files. **Skill install alone is not enough** for Codex: without this MCP entry, the session only has local tools such as `exec_command` and must fall back to `rg`.
+
 Tools: `list_indexes`, `search_code`, `read_indexed_file`, `find_header_source`.
 Results come from the **index snapshot** (not a live filesystem walk). MCP uses the **system Node** `better-sqlite3` build (`npm run rebuild:node`); after `rebuild-electron` / packaging, `build.sh` restores it automatically.
 
-#### Personal Agent Skill installation
+#### Project Agent Skill / Rule installation
 
-The extension installs the packaged `ace-code-search-mcp` Skill automatically on activation:
+The search toolbar **Install project Agent Skill / Rule / MCP** button (command **Ace Code Search: Install Project Agent Skill, Rule, and MCP Config**) writes into each open workspace folder so Codex and Cursor discover guidance from **repo-scoped** paths (higher priority than personal skills):
 
-- Canonical managed copy: `~/.agents/skills/ace-code-search-mcp` (official Cursor and VS Code/Copilot personal skill root)
-- Cursor compatibility wrapper: `~/.cursor/skills/ace-code-search-mcp`
-- VS Code / GitHub Copilot compatibility wrapper: `~/.copilot/skills/ace-code-search-mcp`
+- Codex / shared Skill: `{workspace}/.agents/skills/ace-code-search-mcp`
+- Cursor Skill: `{workspace}/.cursor/skills/ace-code-search-mcp`
+- Cursor Rule: `{workspace}/.cursor/rules/ace-code-search-first.mdc`
+- VS Code Copilot Instruction: `{workspace}/.github/instructions/ace-code-search.instructions.md`
+- Codex MCP client config: `~/.codex/config.toml` and `{workspace}/.codex/config.toml`
+- Cursor MCP client config: `~/.cursor/mcp.json`
 
-New wrappers are managed mirrors that refresh with extension upgrades. Official docs do not guarantee symlink discovery, so the installer no longer creates new symlinks/junctions; an already-correct existing link is left alone. Existing unmanaged files or links are never overwritten; check the **Ace Code Search** output channel for a warning, remove/rename the conflicting directory, then run **Ace Code Search: Install Agent Skill for Cursor and VS Code** from the command palette.
+Activation does **not** auto-install (avoids dirtying git). Managed marker files prevent overwriting user-owned Skill/Rule copies; MCP TOML uses `# BEGIN/END ACE-CODE-SEARCH-MCP` markers. Conflicts are logged to the **Ace Code Search** output channel.
 
-The packaged source is `resources/skills/ace-code-search-mcp/SKILL.md`. Keep it byte-for-byte aligned with the repository's own `.cursor/skills/ace-code-search-mcp/SKILL.md`; `test/agentSkillInstaller.test.ts` enforces this. MCP server registration is separate from Skill install (for Cursor, personal MCP config is `~/.cursor/mcp.json`).
+The packaged Skill source is `resources/skills/ace-code-search-mcp/SKILL.md` (must stay byte-identical to `.cursor/skills/ace-code-search-mcp/SKILL.md` and preferably `.agents/skills/...`). Packaged Cursor Rule is `resources/rules/ace-code-search-first.mdc` (must match `.cursor/rules/ace-code-search-first.mdc`).
 
 #### Prefer-indexed-search guidance
 
-- Project Cursor Rule: `.cursor/rules/ace-code-search-first.mdc` (`alwaysApply: true`).
-- VS Code personal Instruction: installed automatically at `~/.copilot/instructions/ace-code-search.instructions.md` from `resources/rules/ace-code-search.instructions.md`.
-- Cursor User Rule: Cursor officially stores this in **Cursor Settings → Rules → User Rules**, not in a supported file path. On first install/update the extension offers **Copy Cursor User Rule**; the same action is always available as the **Ace Code Search: Copy Cursor User Rule** command.
+- Project Cursor Rule / VS Code Instruction: installed by the toolbar command above.
+- Optional Cursor personal User Rule text: `resources/rules/cursor-user-rule.txt` via **Copy Cursor User Rule (Personal)**.
 
 The guidance prefers indexed MCP tools for code discovery, but requires `rg`/filesystem/direct-read fallback when no matching index exists, `partialIndex` affects completeness, content may be stale, or files are excluded/unindexed. It never treats indexed snapshots as unsaved content.
 

@@ -1,6 +1,7 @@
 .vscode/**
 .cursor/**
 .agents/**
+.codex/**
 .copilot/**
 .vscode-test/**
 .github/**

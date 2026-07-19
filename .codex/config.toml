@@ -1,0 +1,9 @@
+# BEGIN ACE-CODE-SEARCH-MCP
+# Managed by Ace Code Search. Restart Codex after changes.
+[mcp_servers.ace-code-search]
+command = "node"
+args = ["/Users/oscar/.vscode/extensions/oscarking888.ace-code-search-0.7.0/dist/mcp.js", "--extension-root", "/Users/oscar/.vscode/extensions/oscarking888.ace-code-search-0.7.0"]
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+enabled = true
+# END ACE-CODE-SEARCH-MCP

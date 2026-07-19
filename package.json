@@ -97,11 +97,11 @@
       },
       {
         "command": "codeSearch.installAgentSkill",
-        "title": "Ace Code Search: Install Agent Skill and Search Guidance"
+        "title": "Ace Code Search: Install Project Agent Skill, Rule, and MCP Config"
       },
       {
         "command": "codeSearch.copyCursorUserRule",
-        "title": "Ace Code Search: Copy Cursor User Rule"
+        "title": "Ace Code Search: Copy Cursor User Rule (Personal)"
       },
       {
         "command": "codeSearch.openSecondaryIndex",
@@ -369,7 +369,7 @@
     "validate:native": "node scripts/validate-native-artifacts.js",
     "version:bump": "node scripts/bump-version.js",
     "package": "vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
-    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts && npx ts-node test/classHierarchy.test.ts && npx ts-node test/classHierarchyCacheStore.test.ts && npx ts-node test/classHierarchyWorkerPool.test.ts && npx ts-node test/classHierarchyTreeState.test.ts && npx ts-node test/classHierarchyCacheManager.test.ts && npx ts-node test/mcpTools.test.ts && npx ts-node test/agentSkillInstaller.test.ts && npx ts-node test/agentRuleInstaller.test.ts",
+    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts && npx ts-node test/classHierarchy.test.ts && npx ts-node test/classHierarchyCacheStore.test.ts && npx ts-node test/classHierarchyWorkerPool.test.ts && npx ts-node test/classHierarchyTreeState.test.ts && npx ts-node test/classHierarchyCacheManager.test.ts && npx ts-node test/mcpTools.test.ts && npx ts-node test/mcpConfigInstaller.test.ts && npx ts-node test/agentSkillInstaller.test.ts && npx ts-node test/agentRuleInstaller.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js",
     "mcp": "node dist/mcp.js"

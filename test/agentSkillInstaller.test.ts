@@ -5,6 +5,7 @@ import * as path from 'path';
 import {
   AGENT_SKILL_NAME,
   installPersonalAgentSkill,
+  installProjectAgentSkill,
 } from '../src/agentSkillInstaller';
 
 const ROOT = path.join(__dirname, '..');
@@ -174,11 +175,73 @@ async function testPackagedTemplateMatchesProjectSkill(): Promise<void> {
   assert.strictEqual(packaged, project);
 }
 
+async function testProjectInstall(): Promise<void> {
+  const workspaceRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'code-search-project-skill-')
+  );
+  try {
+    const first = await installProjectAgentSkill({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      workspaceRoot,
+    });
+    assert.strictEqual(first.changed, true);
+    assert.strictEqual(first.warnings.length, 0);
+    assert.strictEqual(first.paths.length, 2);
+
+    const agents = path.join(
+      workspaceRoot,
+      '.agents',
+      'skills',
+      AGENT_SKILL_NAME,
+      'SKILL.md'
+    );
+    const cursor = path.join(
+      workspaceRoot,
+      '.cursor',
+      'skills',
+      AGENT_SKILL_NAME,
+      'SKILL.md'
+    );
+    const content = await fs.promises.readFile(agents, 'utf8');
+    assert.ok(content.includes('name: ace-code-search-mcp'));
+    assert.strictEqual(await fs.promises.readFile(cursor, 'utf8'), content);
+
+    const second = await installProjectAgentSkill({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      workspaceRoot,
+    });
+    assert.strictEqual(second.changed, false);
+
+    await fs.promises.writeFile(agents, 'user-owned\n', 'utf8');
+    await fs.promises.rm(
+      path.join(
+        workspaceRoot,
+        '.agents',
+        'skills',
+        AGENT_SKILL_NAME,
+        '.ace-code-search-managed.json'
+      )
+    );
+    const conflict = await installProjectAgentSkill({
+      extensionRoot: ROOT,
+      version: '1.0.1',
+      workspaceRoot,
+    });
+    assert.ok(conflict.warnings.some((w) => w.includes('unmanaged')));
+    assert.strictEqual(await fs.promises.readFile(agents, 'utf8'), 'user-owned\n');
+  } finally {
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<void> {
   await testInstallAndUpdate();
   await testUnmanagedCanonicalIsPreserved();
   await testUnmanagedAliasIsPreserved();
   await testPackagedTemplateMatchesProjectSkill();
+  await testProjectInstall();
   console.log('agentSkillInstaller tests passed');
 }
 

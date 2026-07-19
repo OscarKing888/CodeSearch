@@ -22,8 +22,14 @@ export interface AgentSkillInstallOptions {
   homeDir?: string;
 }
 
+export interface ProjectAgentSkillInstallOptions {
+  extensionRoot: string;
+  version: string;
+  workspaceRoot: string;
+}
+
 export interface AgentSkillPathResult {
-  client: 'canonical' | 'cursor' | 'vscode';
+  client: 'canonical' | 'cursor' | 'vscode' | 'agents' | 'project-cursor';
   path: string;
   mode: 'canonical' | 'symlink' | 'copy' | 'existing';
   changed: boolean;
@@ -107,7 +113,7 @@ async function installCanonical(
       changed: false,
       warning:
         `Skipped existing unmanaged skill at ${canonicalPath}. ` +
-        'Remove or rename it, then run "Ace Code Search: Install Agent Skill" again.',
+        'Remove or rename it, then run "Ace Code Search: Install Project Agent Skill and Search Guidance" again.',
     };
   }
 
@@ -317,6 +323,130 @@ export async function installPersonalAgentSkill(
 
   return {
     canonicalPath,
+    changed: paths.some((item) => item.changed),
+    paths,
+    warnings,
+  };
+}
+
+async function installManagedProjectSkillCopy(
+  client: 'agents' | 'project-cursor',
+  targetDir: string,
+  content: string,
+  version: string,
+  sourceHash: string
+): Promise<AgentSkillPathResult> {
+  const existing = await lstatOrUndefined(targetDir);
+  const markerPath = path.join(targetDir, CANONICAL_MARKER);
+
+  if (existing?.isSymbolicLink()) {
+    return {
+      client,
+      path: targetDir,
+      mode: 'existing',
+      changed: false,
+      warning: `Skipped existing symlink at ${targetDir}.`,
+    };
+  }
+
+  if (existing && !existing.isDirectory()) {
+    return {
+      client,
+      path: targetDir,
+      mode: 'existing',
+      changed: false,
+      warning: `Skipped existing non-directory skill path at ${targetDir}.`,
+    };
+  }
+
+  if (existing?.isDirectory()) {
+    const marker = await readMarker(markerPath);
+    if (!marker) {
+      return {
+        client,
+        path: targetDir,
+        mode: 'existing',
+        changed: false,
+        warning: `Skipped existing unmanaged project skill at ${targetDir}.`,
+      };
+    }
+    if (marker.version === version && marker.sourceHash === sourceHash) {
+      return {
+        client,
+        path: targetDir,
+        mode: 'copy',
+        changed: false,
+      };
+    }
+  }
+
+  await writeManagedSkill(
+    targetDir,
+    content,
+    {
+      owner: OWNER,
+      kind: 'canonical',
+      version,
+      sourceHash,
+    },
+    CANONICAL_MARKER
+  );
+  return {
+    client,
+    path: targetDir,
+    mode: 'copy',
+    changed: true,
+  };
+}
+
+/**
+ * Install Ace Code Search MCP Skill into the current project so Codex/Cursor
+ * discover it from repo-scoped paths (higher priority than personal skills).
+ *
+ * Writes:
+ * - `{workspace}/.agents/skills/ace-code-search-mcp` (Codex / shared)
+ * - `{workspace}/.cursor/skills/ace-code-search-mcp` (Cursor)
+ */
+export async function installProjectAgentSkill(
+  options: ProjectAgentSkillInstallOptions
+): Promise<AgentSkillInstallResult> {
+  const sourcePath = skillSourcePath(options.extensionRoot);
+  const content = await fs.promises.readFile(sourcePath, 'utf8');
+  const sourceHash = hashContent(content);
+  const agentsPath = path.join(
+    options.workspaceRoot,
+    '.agents',
+    'skills',
+    AGENT_SKILL_NAME
+  );
+  const cursorPath = path.join(
+    options.workspaceRoot,
+    '.cursor',
+    'skills',
+    AGENT_SKILL_NAME
+  );
+
+  const agents = await installManagedProjectSkillCopy(
+    'agents',
+    agentsPath,
+    content,
+    options.version,
+    sourceHash
+  );
+  const cursor = await installManagedProjectSkillCopy(
+    'project-cursor',
+    cursorPath,
+    content,
+    options.version,
+    sourceHash
+  );
+  const paths = [agents, cursor];
+  const warnings = paths
+    .map((item) => item.warning)
+    .filter((item): item is string => Boolean(item));
+
+  return {
+    canonicalPath: agentsPath,
     changed: paths.some((item) => item.changed),
     paths,
     warnings,

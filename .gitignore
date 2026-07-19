@@ -147,6 +147,7 @@ vite.config.ts.timestamp-*
 # CodeSearch project specific — only root native/ binaries (not src/native/ source)
 /.tools/
 /native/
+/native-node/
 *.vsix
 *.db
 .DS_Store

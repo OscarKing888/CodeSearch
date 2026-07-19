@@ -7,6 +7,24 @@ description: Searches indexed source code through the read-only Ace Code Search 
 
 Use the Ace Code Search MCP tools instead of a filesystem scan when the requested workspace is indexed.
 
+## Prerequisites
+
+The Skill alone does **not** expose tools. The agent session must have the Ace Code Search MCP server registered and connected so these tools exist:
+
+- `list_indexes`
+- `search_code`
+- `read_indexed_file`
+- `find_header_source`
+
+If those tools are missing from the available tool list:
+
+1. Tell the user the MCP server is not connected (Skill guidance is not enough).
+2. For Codex (VS Code / CLI / desktop): ensure `[mcp_servers.ace-code-search]` exists in `~/.codex/config.toml` (or trusted project `.codex/config.toml`), then restart Codex or run `/mcp`.
+3. For Cursor: ensure `ace-code-search` exists in `~/.cursor/mcp.json`, then reload MCP.
+4. Fall back to `rg` / filesystem search only after stating that MCP tools are unavailable.
+
+In Ace Code Search, the toolbar **Install project Agent Skill / Rule** command also writes the Codex/Cursor MCP client config pointing at this extension's `dist/mcp.js`.
+
 ## Workflow
 
 1. Call `list_indexes` when the target index is unknown.

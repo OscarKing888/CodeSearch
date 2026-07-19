@@ -9,10 +9,12 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Add hierarchy/context SVG toolbar icons, filter-clear selection reveal, and subclass expand/collapse actions in the class-row context menu.
 - Install the Ace Code Search MCP Agent Skill for both Cursor and VS Code/Copilot from one managed `~/.agents/skills` copy, with client-specific compatibility wrappers and a manual repair command.
 - Add always-on guidance to prefer indexed Ace Code Search for code discovery, with a managed VS Code personal Instruction and a copy helper for Cursor User Rules.
-- Add a search toolbar button that installs/repairs the Agent Skill and search guidance (and prompts to copy the Cursor User Rule when needed).
+- Add a search toolbar button that installs/repairs **project-scoped** Agent Skill and search guidance (`.agents/skills`, `.cursor/skills`, `.cursor/rules`, `.github/instructions`) and registers the Ace Code Search MCP server for Codex (`~/.codex/config.toml`) and Cursor (`~/.cursor/mcp.json`); activation no longer silently writes personal copies.
 - Add project maintainer rule `.cursor/rules/mcp-feature-parity.mdc` so searchable feature work keeps MCP tools, Skill templates, and guidance docs in sync.
 
 ### Fixed
+- Detect when PATH `code` is Cursor's shim on macOS and install into the real Visual Studio Code.app CLI / `~/.vscode/extensions` instead.
+- Fix Ace Code Search MCP startup from packaged VSIX: ship Node ABI binaries under `native-node/` and always resolve them for non-Electron MCP/CLI (VSIX omits `better-sqlite3/build`).
 - Prevent `Maximum call stack size exceeded` in large class hierarchies by removing unbounded array-spread calls and using iterative filter/render graph traversal.
 - Move editor file watching out of the extension-host chokidar crawl, coalesce queued changes during searches, and prevent large Unreal Engine workspaces from starving search/UI work.
 - Persist search profiles from search start through success, cancellation, errors, or disposal, including incremental checkpoints and ACK wait timings.

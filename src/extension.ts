@@ -19,16 +19,15 @@ import { getLogicalCpuCount } from './index/threadCount';
 import { switchHeaderSource as runSwitchHeaderSource } from './pairing/switchHeaderSource';
 import { migrateUserHeaderSourceKeybindings } from './pairing/migrateHeaderSourceKeybindings';
 import { revealProfileLogFolder } from './utils/searchProfileUi';
-import { installPersonalAgentSkill } from './agentSkillInstaller';
+import { installProjectAgentSkill } from './agentSkillInstaller';
 import {
-  installVscodePersonalInstruction,
+  installProjectAgentRules,
   readCursorUserRule,
 } from './agentRuleInstaller';
+import { installMcpClientConfig } from './mcpConfigInstaller';
 
 const CREATE_INDEX_LABEL = 'Create Index';
 const SKIP_INDEX_LABEL = 'Not Now';
-const CURSOR_USER_RULE_PROMPT_VERSION_KEY =
-  'codeSearch.cursorUserRulePromptVersion';
 
 const INDEXING_CONFIG_KEYS = [
   'codeSearch.excludeGlobs',
@@ -65,7 +64,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   extensionContext = context;
   logCpuInfo(context);
   registerCommands(context);
-  void installAgentSkill(context, false);
+  // Project Skill/Rule install is explicit (toolbar / command) so we do not
+  // silently dirty workspace git status on every activation.
   void migrateUserHeaderSourceKeybindings(resolveEditorProduct(), (message) =>
     outputChannel?.appendLine(message)
   );
@@ -187,89 +187,98 @@ async function installAgentSkill(
   notify: boolean
 ): Promise<void> {
   try {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+      if (notify) {
+        void vscode.window.showWarningMessage(
+          'Ace Code Search: Open a folder or workspace before installing project Agent Skill / Rule.'
+        );
+      }
+      return;
+    }
+
     const version = String(context.extension.packageJSON.version ?? '0.0.0');
-    const result = await installPersonalAgentSkill({
+    const installedRoots: string[] = [];
+    const warnings: string[] = [];
+
+    // Codex/Cursor need an MCP server entry before Skill tools exist.
+    // User-level Codex config applies to the VS Code Codex extension.
+    const mcp = await installMcpClientConfig({
       extensionRoot: context.extensionPath,
-      version,
+      workspaceRoot: folders[0]?.uri.fsPath,
     });
-    const vscodeInstruction = await installVscodePersonalInstruction({
-      extensionRoot: context.extensionPath,
-      version,
-    });
-    for (const item of result.paths) {
+    for (const item of mcp.paths) {
       outputChannel?.appendLine(
-        `Agent Skill ${item.client}: ${item.mode} ${item.path}` +
+        `MCP config ${item.client}: ${item.path}` +
           (item.changed ? ' (updated)' : '')
       );
     }
-    for (const warning of result.warnings) {
-      outputChannel?.appendLine(`Agent Skill warning: ${warning}`);
+    warnings.push(...mcp.warnings);
+
+    for (const folder of folders) {
+      const workspaceRoot = folder.uri.fsPath;
+      const skill = await installProjectAgentSkill({
+        extensionRoot: context.extensionPath,
+        version,
+        workspaceRoot,
+      });
+      const rules = await installProjectAgentRules({
+        extensionRoot: context.extensionPath,
+        version,
+        workspaceRoot,
+      });
+
+      for (const item of skill.paths) {
+        outputChannel?.appendLine(
+          `Project Agent Skill [${folder.name}] ${item.client}: ${item.mode} ${item.path}` +
+            (item.changed ? ' (updated)' : '')
+        );
+      }
+      for (const item of rules.paths) {
+        outputChannel?.appendLine(
+          `Project Agent Rule [${folder.name}]: ${item.path}` +
+            (item.changed ? ' (updated)' : '')
+        );
+      }
+      warnings.push(...skill.warnings, ...rules.warnings);
+      if (skill.changed || rules.changed || mcp.changed) {
+        installedRoots.push(workspaceRoot);
+      } else if (skill.warnings.length === 0 && rules.warnings.length === 0) {
+        installedRoots.push(workspaceRoot);
+      }
     }
-    outputChannel?.appendLine(
-      `VS Code personal instruction: ${vscodeInstruction.path}` +
-        (vscodeInstruction.changed ? ' (updated)' : '')
+
+    for (const warning of warnings) {
+      outputChannel?.appendLine(`Agent guidance warning: ${warning}`);
+    }
+
+    if (!notify) {
+      return;
+    }
+
+    if (warnings.length > 0) {
+      void vscode.window.showWarningMessage(
+        `Ace Code Search: Project Agent guidance installed with warnings — ${warnings.join(' ')}`
+      );
+      return;
+    }
+
+    const rootLabel =
+      installedRoots.length === 1
+        ? installedRoots[0]
+        : `${installedRoots.length} workspace folders`;
+    void vscode.window.showInformationMessage(
+      `Ace Code Search: Project Skill/Rule + MCP config installed under ${rootLabel}. ` +
+        'Restart Codex (or run /mcp) so list_indexes / search_code appear.'
     );
-    if (vscodeInstruction.warning) {
-      outputChannel?.appendLine(
-        `VS Code personal instruction warning: ${vscodeInstruction.warning}`
-      );
-    }
-
-    const warnings = [
-      ...result.warnings,
-      ...(vscodeInstruction.warning ? [vscodeInstruction.warning] : []),
-    ];
-    if (resolveEditorProduct() === 'Cursor') {
-      const promptedVersion = context.globalState.get<string>(
-        CURSOR_USER_RULE_PROMPT_VERSION_KEY
-      );
-      if (notify || (result.changed && promptedVersion !== version)) {
-        await promptCursorUserRule(context, version, warnings);
-        return;
-      }
-    }
-
-    if (notify) {
-      if (warnings.length > 0) {
-        void vscode.window.showWarningMessage(
-          `Ace Code Search: Agent guidance installed with warnings — ${warnings.join(' ')}`
-        );
-      } else {
-        void vscode.window.showInformationMessage(
-          `Ace Code Search: Agent Skill and VS Code search instruction installed at ${result.canonicalPath}`
-        );
-      }
-    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     outputChannel?.appendLine(`Agent Skill install failed: ${message}`);
     if (notify) {
       void vscode.window.showErrorMessage(
-        `Ace Code Search: Failed to install Agent guidance — ${message}`
+        `Ace Code Search: Failed to install project Agent guidance — ${message}`
       );
     }
-  }
-}
-
-async function promptCursorUserRule(
-  context: vscode.ExtensionContext,
-  version: string,
-  warnings: string[]
-): Promise<void> {
-  const copyLabel = 'Copy Cursor User Rule';
-  const message =
-    warnings.length > 0
-      ? `Ace Code Search: Agent guidance installed with warnings — ${warnings.join(' ')}`
-      : 'Ace Code Search: Skill installed. Cursor requires User Rules to be added from Settings; copy the recommended rule now?';
-  const selected = warnings.length > 0
-    ? await vscode.window.showWarningMessage(message, copyLabel)
-    : await vscode.window.showInformationMessage(message, copyLabel);
-  await context.globalState.update(
-    CURSOR_USER_RULE_PROMPT_VERSION_KEY,
-    version
-  );
-  if (selected === copyLabel) {
-    await copyCursorUserRule(context);
   }
 }
 

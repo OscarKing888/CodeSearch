@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  installProjectAgentRules,
   installVscodePersonalInstruction,
   readCursorUserRule,
 } from '../src/agentRuleInstaller';
@@ -88,12 +89,63 @@ async function testCursorRuleAndProjectRule(): Promise<void> {
   );
   assert.ok(projectRule.includes('alwaysApply: true'));
   assert.ok(projectRule.includes('partialIndex'));
+
+  const packagedRule = await fs.promises.readFile(
+    path.join(ROOT, 'resources', 'rules', 'ace-code-search-first.mdc'),
+    'utf8'
+  );
+  assert.strictEqual(packagedRule, projectRule);
+}
+
+async function testProjectRuleInstall(): Promise<void> {
+  const workspaceRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'code-search-project-rule-')
+  );
+  try {
+    const first = await installProjectAgentRules({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      workspaceRoot,
+    });
+    assert.strictEqual(first.changed, true);
+    assert.strictEqual(first.warnings.length, 0);
+    assert.strictEqual(first.paths.length, 2);
+
+    const cursorRule = path.join(
+      workspaceRoot,
+      '.cursor',
+      'rules',
+      'ace-code-search-first.mdc'
+    );
+    const githubInstruction = path.join(
+      workspaceRoot,
+      '.github',
+      'instructions',
+      'ace-code-search.instructions.md'
+    );
+    assert.ok(
+      (await fs.promises.readFile(cursorRule, 'utf8')).includes('alwaysApply: true')
+    );
+    assert.ok(
+      (await fs.promises.readFile(githubInstruction, 'utf8')).includes('applyTo: "**"')
+    );
+
+    const second = await installProjectAgentRules({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      workspaceRoot,
+    });
+    assert.strictEqual(second.changed, false);
+  } finally {
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true });
+  }
 }
 
 async function main(): Promise<void> {
   await testInstallAndUpdate();
   await testUnmanagedInstructionIsPreserved();
   await testCursorRuleAndProjectRule();
+  await testProjectRuleInstall();
   console.log('agentRuleInstaller tests passed');
 }
 

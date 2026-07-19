@@ -22,6 +22,20 @@ function resolveNodeGyp() {
   return null;
 }
 
+function stageNativeNodeBinary() {
+  const src = path.join(MODULE_DIR, 'build', 'Release', 'better_sqlite3.node');
+  if (!fs.existsSync(src)) {
+    throw new Error(`Expected Node better_sqlite3 binary missing: ${src}`);
+  }
+
+  const tag = `${process.platform}-${process.arch}-${process.versions.modules}`;
+  const destDir = path.join(ROOT, 'native-node', tag);
+  const dest = path.join(destDir, 'better_sqlite3.node');
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.copyFileSync(src, dest);
+  console.log(`Staged Node ABI binary: native-node/${tag}/better_sqlite3.node`);
+}
+
 function main() {
   if (!fs.existsSync(MODULE_DIR)) {
     throw new Error('better-sqlite3 is not installed. Run install.bat first.');
@@ -46,6 +60,7 @@ function main() {
     });
   }
 
+  stageNativeNodeBinary();
   console.log('System Node rebuild complete.');
 }
 

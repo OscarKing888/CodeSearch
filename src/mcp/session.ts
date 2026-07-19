@@ -24,17 +24,45 @@ export interface OpenedIndex {
   searcher: SearchService;
 }
 
+function resolveDefaultExtensionRoot(): string {
+  const candidates = [
+    path.join(__dirname, '..'),
+    path.join(__dirname, '..', '..'),
+  ];
+  for (const candidate of candidates) {
+    const packageJson = path.join(candidate, 'package.json');
+    if (!fs.existsSync(packageJson)) {
+      continue;
+    }
+    const hasNodeNative =
+      fs.existsSync(path.join(candidate, 'native-node')) ||
+      fs.existsSync(
+        path.join(
+          candidate,
+          'node_modules',
+          'better-sqlite3',
+          'build',
+          'Release',
+          'better_sqlite3.node'
+        )
+      );
+    if (hasNodeNative) {
+      return candidate;
+    }
+  }
+  return path.join(__dirname, '..');
+}
+
 export class McpIndexSession {
   private indexes = new Map<string, OpenedIndex>();
   private byDbPath = new Map<string, OpenedIndex>();
 
   static async create(options: McpCliOptions): Promise<McpIndexSession> {
-    // Only pin a nativeBinding when the caller provides an extension root.
-    // Otherwise let better-sqlite3 load the system Node build from node_modules
-    // (required for CLI/MCP after Electron rebuilds overwrite that binary).
-    if (options.extensionRoot) {
-      configureBetterSqlite3(options.extensionRoot);
-    }
+    // Always pin nativeBinding for MCP: VSIX omits node_modules/better-sqlite3/build,
+    // so we load from native-node/<platform-arch-abi>/ (system Node ABI).
+    const extensionRoot =
+      options.extensionRoot ?? resolveDefaultExtensionRoot();
+    configureBetterSqlite3(extensionRoot);
 
     const session = new McpIndexSession();
     const metas = await resolveIndexMetas(options);
