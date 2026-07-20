@@ -5,8 +5,26 @@ import { IndexManager } from '../index/IndexManager';
 import { IndexService } from '../index/IndexService';
 import { DirectoryMapping, IndexMeta } from '../index/types';
 import { formatPatternLines, parsePatternLines, PerIndexExcludes } from '../index/excludePatterns';
+import {
+  DEFAULT_UNREAL_CORE_EXCLUDE_DIR_NAMES,
+  getIndexingSettings,
+} from '../indexingSettings';
+import {
+  discoverWorkspaceIndexCandidates,
+  WorkspaceIndexCandidate,
+} from '../index/indexDiscovery';
+import { canonicalPathKey, samePath } from '../index/sharedIndexStorage';
+import {
+  getWorkspaceIndexBindingKey,
+  IndexAccessMode,
+  mergeWorkspaceSecondaryBindings,
+  normalizeWorkspaceIndexBinding,
+  PrimaryIndexSource,
+  WorkspaceIndexBindingV2,
+} from '../index/workspaceIndexBinding';
 
 import { formatIndexDisplayTitle } from './indexDisplayTitle';
+import { mergeIndexCatalog } from './indexCatalog';
 
 export { formatIndexDisplayTitle } from './indexDisplayTitle';
 
@@ -17,19 +35,66 @@ export interface IndexListItem {
   dbPath: string;
   rootDirs: string[];
   readOnly: boolean;
+  requestedReadOnly: boolean;
+  usage: 'primary' | 'secondary' | 'available';
   isPrimary: boolean;
   isAttached: boolean;
+  exists: boolean;
+  isShared: boolean;
+  writerLabel?: string;
   directoryMappings: DirectoryMapping[];
   mappingsText: string;
   excludeDirsText: string;
   excludeFilesText: string;
   excludeGlobsText: string;
   statusMessage: string;
+  status: 'idle' | 'scanning' | 'indexing' | 'upToDate' | 'available' | 'missing';
   partial: boolean;
+  canRefresh: boolean;
+}
+
+export interface IndexManagementWorkspaceContext {
+  hash: string;
+  roots: string[];
+  sharedDbPath: string;
+  primarySource?: PrimaryIndexSource;
+  autocreate?: boolean;
+}
+
+export interface IndexWorkspaceSummary {
+  hash: string;
+  roots: string[];
+  sharedDbPath: string;
+  autocreate: boolean;
+  primary?: {
+    id: string;
+    dbPath: string;
+    source: PrimaryIndexSource;
+    accessMode: 'writable' | 'readOnly';
+    writerLabel?: string;
+  };
 }
 
 export interface IndexListPayload {
+  workspace: IndexWorkspaceSummary;
+  indexingRules: {
+    includeGlobsText: string;
+    inheritedExcludeDirsText: string;
+    inheritedExcludeFilesText: string;
+    inheritedExcludeGlobsText: string;
+    unrealCoreDirs: string[];
+  };
   indexes: IndexListItem[];
+}
+
+export type IndexOperationResult =
+  | { status: 'ok'; message?: string; source?: PrimaryIndexSource }
+  | { status: 'cancelled' }
+  | { status: 'error'; message: string };
+
+interface IndexPickerItem extends vscode.QuickPickItem {
+  pickerType: 'candidate' | 'browse';
+  candidate?: WorkspaceIndexCandidate;
 }
 
 export function parseMappings(input: string): DirectoryMapping[] {
@@ -75,33 +140,83 @@ export function parseExcludeRulesInput(
   };
 }
 
-export function getIndexListPayload(manager: IndexManager): IndexListPayload {
+export function getIndexListPayload(
+  manager: IndexManager,
+  workspaceContext?: IndexManagementWorkspaceContext
+): IndexListPayload {
+  const indexingSettings = getIndexingSettings();
   const primary = manager.getPrimary();
   const primaryId = primary?.id;
   const attachedIds = new Set(manager.getWorkspaceSecondaryIds());
   const registryIndexes = manager.getRegistry().getAll();
+  const activeIndexes: IndexMeta[] = [];
+  if (primary) {
+    const registered = manager.getIndexMeta(primary.id);
+    const runtime = manager.getRuntimeAccess(primary.id);
+    activeIndexes.push({
+      ...(registered ?? {
+        directoryMappings: [],
+        workspaceHashes: [manager.getWorkspaceHash()],
+        createdAt: 0,
+        updatedAt: 0,
+      }),
+      id: primary.id,
+      name: primary.name,
+      dbPath: primary.getDbPath(),
+      rootDirs: primary.getRootDirs(),
+      readOnly: runtime?.requestedReadOnly ?? primary.isReadOnly(),
+    });
+  }
+  for (const { meta, service } of manager.getAttachedIndexes()) {
+    const runtime = manager.getRuntimeAccess(service.id);
+    activeIndexes.push({
+      ...meta,
+      id: service.id,
+      name: service.name,
+      dbPath: service.getDbPath(),
+      rootDirs: service.getRootDirs(),
+      readOnly: runtime?.requestedReadOnly ?? service.isReadOnly(),
+    });
+  }
+  const catalogIndexes = mergeIndexCatalog(registryIndexes, activeIndexes);
   const items: IndexListItem[] = [];
 
-  for (const meta of registryIndexes) {
+  for (const meta of catalogIndexes) {
     const service = findServiceById(manager, meta.id);
     const progress = service?.getProgress();
+    const runtimeAccess = manager.getRuntimeAccess(meta.id);
     const excludeText = formatExcludeRules(meta);
+    const isPrimary = meta.id === primaryId;
+    const isAttachedSecondary = attachedIds.has(meta.id);
+    const exists = fs.existsSync(meta.dbPath);
+    const status = progress?.status ?? (exists ? 'available' : 'missing');
+    const readOnly = service?.isReadOnly() ?? meta.readOnly;
     items.push({
       id: meta.id,
       name: meta.name,
       displayTitle: formatIndexDisplayTitle(meta.rootDirs, meta.name),
       dbPath: meta.dbPath,
       rootDirs: meta.rootDirs,
-      readOnly: meta.readOnly,
-      isPrimary: meta.id === primaryId,
-      isAttached: meta.id === primaryId || attachedIds.has(meta.id),
+      readOnly,
+      requestedReadOnly: runtimeAccess?.requestedReadOnly ?? meta.readOnly,
+      usage: isPrimary ? 'primary' : isAttachedSecondary ? 'secondary' : 'available',
+      isPrimary,
+      isAttached: isPrimary || isAttachedSecondary,
+      exists,
+      isShared: workspaceContext ? samePath(meta.dbPath, workspaceContext.sharedDbPath) : false,
+      writerLabel:
+        runtimeAccess && runtimeAccess.effectiveReadOnly && !runtimeAccess.requestedReadOnly
+          ? runtimeAccess.writerOwner?.label
+          : undefined,
       directoryMappings: meta.directoryMappings,
       mappingsText: formatMappings(meta.directoryMappings),
       excludeDirsText: excludeText.excludeDirsText,
       excludeFilesText: excludeText.excludeFilesText,
       excludeGlobsText: excludeText.excludeGlobsText,
-      statusMessage: progress?.message ?? '—',
-      partial: progress ? progress.status !== 'upToDate' : false,
+      statusMessage: progress?.message ?? (exists ? 'Available' : 'Database missing'),
+      status,
+      partial: progress ? progress.status === 'scanning' || progress.status === 'indexing' : false,
+      canRefresh: !!service && !service.isReadOnly(),
     });
   }
 
@@ -115,7 +230,42 @@ export function getIndexListPayload(manager: IndexManager): IndexListPayload {
     return a.displayTitle.localeCompare(b.displayTitle);
   });
 
-  return { indexes: items };
+  const primaryRuntime = primary ? manager.getRuntimeAccess(primary.id) : undefined;
+  const source: PrimaryIndexSource = workspaceContext?.autocreate
+    ? 'autocreate'
+    : workspaceContext?.primarySource ??
+      (primary && workspaceContext && samePath(primary.getDbPath(), workspaceContext.sharedDbPath)
+        ? 'shared'
+        : 'legacy');
+
+  return {
+    workspace: {
+      hash: workspaceContext?.hash ?? manager.getWorkspaceHash(),
+      roots: workspaceContext?.roots ?? manager.getWorkspaceRoots(),
+      sharedDbPath: workspaceContext?.sharedDbPath ?? manager.getSharedDbPath() ?? '',
+      autocreate: workspaceContext?.autocreate ?? false,
+      primary: primary
+        ? {
+            id: primary.id,
+            dbPath: primary.getDbPath(),
+            source,
+            accessMode: primary.isReadOnly() ? 'readOnly' : 'writable',
+            writerLabel:
+              primaryRuntime?.effectiveReadOnly && !primaryRuntime.requestedReadOnly
+                ? primaryRuntime.writerOwner?.label
+                : undefined,
+          }
+        : undefined,
+    },
+    indexingRules: {
+      includeGlobsText: formatPatternLines(indexingSettings.includeGlobs),
+      inheritedExcludeDirsText: formatPatternLines(indexingSettings.excludeDirNames),
+      inheritedExcludeFilesText: formatPatternLines(indexingSettings.excludeFileNames),
+      inheritedExcludeGlobsText: formatPatternLines(indexingSettings.excludeGlobs),
+      unrealCoreDirs: [...DEFAULT_UNREAL_CORE_EXCLUDE_DIR_NAMES],
+    },
+    indexes: items,
+  };
 }
 
 function findServiceById(manager: IndexManager, id: string): IndexService | undefined {
@@ -124,6 +274,209 @@ function findServiceById(manager: IndexManager, id: string): IndexService | unde
     return primary;
   }
   return manager.getAttachedIndexes().find((a) => a.meta.id === id)?.service;
+}
+
+async function discoverCandidates(
+  manager: IndexManager,
+  workspaceContext?: IndexManagementWorkspaceContext
+): Promise<WorkspaceIndexCandidate[]> {
+  const roots = workspaceContext?.roots ?? manager.getWorkspaceRoots();
+  const hash = workspaceContext?.hash ?? manager.getWorkspaceHash();
+  return discoverWorkspaceIndexCandidates(roots, hash, {
+    source: 'current-ide',
+    path: manager.getRegistry().getPath(),
+    indexes: manager.getRegistry().getAll(),
+  });
+}
+
+function candidateKey(dbPath: string): string {
+  return canonicalPathKey(dbPath);
+}
+
+function formatCandidateSource(source: string): string {
+  if (source === 'current-ide') return 'This IDE';
+  if (source.startsWith('vscode:')) return 'VS Code';
+  if (source.startsWith('cursor:')) return 'Cursor';
+  if (source === 'shared') return 'Shared path';
+  return source;
+}
+
+export async function useSharedPrimaryIndex(
+  manager: IndexManager,
+  workspaceContext: IndexManagementWorkspaceContext
+): Promise<IndexOperationResult> {
+  if (workspaceContext.autocreate) {
+    return {
+      status: 'error',
+      message: 'This workspace primary is controlled by code-search.autocreate',
+    };
+  }
+  try {
+    const service = await manager.openPrimary(
+      workspaceContext.sharedDbPath,
+      workspaceContext.roots,
+      'Shared workspace index',
+      { readOnly: false }
+    );
+    void service.startIndexing().catch((error) => {
+      void vscode.window.showErrorMessage(`Ace Code Search: ${errorMessage(error)}`);
+    });
+    const access = manager.getRuntimeAccess(service.id);
+    return {
+      status: 'ok',
+      source: 'shared',
+      message:
+        access?.effectiveReadOnly && !access.requestedReadOnly
+          ? `Using the shared index read-only while ${access.writerOwner?.label ?? 'another IDE'} owns writes`
+          : 'Using the shared cross-IDE workspace index',
+    };
+  } catch (error) {
+    return { status: 'error', message: errorMessage(error) };
+  }
+}
+
+export async function selectPrimaryIndex(
+  manager: IndexManager,
+  workspaceContext: IndexManagementWorkspaceContext
+): Promise<IndexOperationResult> {
+  if (workspaceContext.autocreate) {
+    return {
+      status: 'error',
+      message: 'Edit code-search.autocreate to change this workspace primary index',
+    };
+  }
+
+  const currentPath = manager.getPrimary()?.getDbPath();
+  const discovered = await discoverCandidates(manager, workspaceContext);
+  const discoveredShared = discovered.find((candidate) =>
+    samePath(candidate.meta.dbPath, workspaceContext.sharedDbPath)
+  );
+  const candidates = discovered.filter(
+    (candidate) =>
+      candidate.exists &&
+      !samePath(candidate.meta.dbPath, workspaceContext.sharedDbPath) &&
+      (!currentPath || !samePath(candidate.meta.dbPath, currentPath))
+  );
+  const items: IndexPickerItem[] = candidates.map((candidate) => ({
+    label: candidate.meta.name,
+    description: candidate.sources.map(formatCandidateSource).join(', '),
+    detail: candidate.meta.dbPath,
+    pickerType: 'candidate',
+    candidate,
+  }));
+  const registeredShared = manager
+    .getRegistry()
+    .getByDbPath(workspaceContext.sharedDbPath);
+  items.unshift({
+    label: 'Use shared workspace index',
+    description: 'Same deterministic database path in VS Code and Cursor',
+    detail: workspaceContext.sharedDbPath,
+    pickerType: 'candidate',
+    candidate: {
+      key: candidateKey(workspaceContext.sharedDbPath),
+      meta: registeredShared ?? discoveredShared?.meta ?? {
+        id: '__shared__',
+        name: 'Shared workspace index',
+        dbPath: workspaceContext.sharedDbPath,
+        rootDirs: workspaceContext.roots,
+        readOnly: false,
+        directoryMappings: [],
+        workspaceHashes: [workspaceContext.hash],
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      sources: ['shared'],
+      exactRoots: true,
+      legacyHashMatch: true,
+      exists: fs.existsSync(workspaceContext.sharedDbPath),
+    },
+  });
+  items.push({
+    label: 'Browse for index database...',
+    description: 'Manually choose an existing index.db file',
+    pickerType: 'browse',
+  });
+
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Choose the primary index for this workspace',
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+  if (!picked) {
+    return { status: 'cancelled' };
+  }
+
+  let dbPath = picked.candidate?.meta.dbPath;
+  let name = picked.candidate?.meta.name ?? 'Primary';
+  let rootDirs = picked.candidate?.meta.rootDirs ?? workspaceContext.roots;
+  if (picked.pickerType === 'browse') {
+    const uri = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectMany: false,
+      filters: { Database: ['db'] },
+      openLabel: 'Use as workspace primary',
+    });
+    if (!uri?.[0]) {
+      return { status: 'cancelled' };
+    }
+    dbPath = uri[0].fsPath;
+    name = path.basename(path.dirname(dbPath)) || 'Primary';
+    rootDirs = workspaceContext.roots;
+  }
+  if (!dbPath) {
+    return { status: 'error', message: 'No primary index database was selected' };
+  }
+
+  const isShared = samePath(dbPath, workspaceContext.sharedDbPath);
+  const access = isShared && !fs.existsSync(dbPath)
+    ? { value: false }
+    : await vscode.window.showQuickPick(
+        [
+          {
+            label: 'Read-only (Recommended for an existing index)',
+            description: 'Never scans or writes from this IDE',
+            value: true,
+          },
+          {
+            label: 'Automatic single-writer',
+            description: 'Writable only when no other IDE owns the writer lease',
+            value: false,
+          },
+        ],
+        { placeHolder: 'Primary index access mode' }
+      );
+  if (!access) {
+    return { status: 'cancelled' };
+  }
+
+  try {
+    const service = await manager.openPrimary(dbPath, rootDirs, name, {
+      readOnly: access.value,
+      excludeRules: picked.candidate
+        ? {
+            excludeDirNames: picked.candidate.meta.excludeDirNames,
+            excludeFileNames: picked.candidate.meta.excludeFileNames,
+            excludeGlobs: picked.candidate.meta.excludeGlobs,
+          }
+        : undefined,
+      directoryMappings: picked.candidate?.meta.directoryMappings,
+    });
+    void service.startIndexing().catch((error) => {
+      void vscode.window.showErrorMessage(`Ace Code Search: ${errorMessage(error)}`);
+    });
+    const source: PrimaryIndexSource = isShared ? 'shared' : 'manual';
+    const runtime = manager.getRuntimeAccess(service.id);
+    return {
+      status: 'ok',
+      source,
+      message:
+        runtime?.effectiveReadOnly && !runtime.requestedReadOnly
+          ? `Primary opened read-only while ${runtime.writerOwner?.label ?? 'another IDE'} owns writes`
+          : 'Workspace primary index changed',
+    };
+  } catch (error) {
+    return { status: 'error', message: errorMessage(error) };
+  }
 }
 
 export async function renameIndex(manager: IndexManager, id: string, name: string): Promise<string | null> {
@@ -178,12 +531,14 @@ export async function attachIndex(manager: IndexManager, id: string): Promise<st
     return 'Primary index is always attached';
   }
   try {
-    await manager.attachSecondary(meta.dbPath, {
+    const service = await manager.attachSecondary(meta.dbPath, {
       name: meta.name,
-      readOnly: meta.readOnly,
+      readOnly: meta.readOnly || meta.rootDirs.length === 0,
       directoryMappings: meta.directoryMappings,
       rootDirs: meta.rootDirs,
+      waitForInitialIndex: false,
     });
+    startSecondaryIndexingInBackground(service, meta.dbPath);
     return null;
   } catch (e) {
     return e instanceof Error ? e.message : String(e);
@@ -244,14 +599,14 @@ export async function moveIndexDb(
   return ok ? null : 'Move failed';
 }
 
-export async function createStandaloneIndex(manager: IndexManager): Promise<string | null> {
+export async function createStandaloneIndex(manager: IndexManager): Promise<IndexOperationResult> {
   const rootUri = await vscode.window.showOpenDialog({
     canSelectFolders: true,
     canSelectMany: false,
     openLabel: 'Select root directory to index',
   });
   if (!rootUri?.[0]) {
-    return null;
+    return { status: 'cancelled' };
   }
 
   const name = await vscode.window.showInputBox({
@@ -259,7 +614,7 @@ export async function createStandaloneIndex(manager: IndexManager): Promise<stri
     value: path.basename(rootUri[0].fsPath),
   });
   if (!name) {
-    return null;
+    return { status: 'cancelled' };
   }
 
   const saveUri = await vscode.window.showSaveDialog({
@@ -267,94 +622,140 @@ export async function createStandaloneIndex(manager: IndexManager): Promise<stri
     filters: { Database: ['db'] },
   });
   if (!saveUri) {
-    return null;
+    return { status: 'cancelled' };
   }
 
   try {
     await fs.promises.mkdir(path.dirname(saveUri.fsPath), { recursive: true });
-    const service = await manager.attachSecondary(saveUri.fsPath, {
-      name,
-      readOnly: false,
-      rootDirs: [rootUri[0].fsPath],
-    });
-
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Indexing ${name}...` },
-      () => service.refresh(true)
+      () =>
+        manager.attachSecondary(saveUri.fsPath, {
+          name,
+          readOnly: false,
+          rootDirs: [rootUri[0].fsPath],
+        })
     );
-    return null;
+    return { status: 'ok', message: 'Secondary index created' };
   } catch (e) {
-    return e instanceof Error ? e.message : String(e);
+    return { status: 'error', message: errorMessage(e) };
   }
 }
 
-export async function browseAndAttachIndex(manager: IndexManager): Promise<string | null> {
+export async function browseAndAttachIndex(
+  manager: IndexManager,
+  workspaceContext?: IndexManagementWorkspaceContext
+): Promise<IndexOperationResult> {
   const indexes = manager.getRegistry().getAll();
-  const attached = new Set(manager.getWorkspaceSecondaryIds());
-  const primaryId = manager.getPrimary()?.id;
+  const primaryPath = manager.getPrimary()?.getDbPath();
+  const attachedPaths = new Set(
+    manager.getAttachedIndexes().map((item) => canonicalPathKey(item.meta.dbPath))
+  );
+  const candidates = await discoverCandidates(manager, workspaceContext);
+  const byPath = new Map<string, WorkspaceIndexCandidate>();
+  for (const candidate of candidates) {
+    byPath.set(candidate.key, candidate);
+  }
+  for (const meta of indexes) {
+    const key = candidateKey(meta.dbPath);
+    if (!byPath.has(key)) {
+      byPath.set(key, {
+        key,
+        meta,
+        sources: ['current-ide'],
+        exactRoots: false,
+        legacyHashMatch: false,
+        exists: fs.existsSync(meta.dbPath),
+      });
+    }
+  }
 
-  const items = [
-    ...indexes
-      .filter((i) => i.id !== primaryId)
-      .map((idx) => ({
-        label: idx.name,
-        description: attached.has(idx.id) ? 'Attached' : idx.readOnly ? 'Read-only' : 'Writable',
-        detail: idx.dbPath,
-        id: idx.id,
-        dbPath: idx.dbPath,
-        meta: idx,
-      })),
-    {
-      label: 'Browse for index database...',
-      id: '__browse__',
-      dbPath: '',
-      meta: undefined as never,
-      description: '',
-      detail: '',
-    },
-  ];
+  const items: IndexPickerItem[] = Array.from(byPath.values())
+    .filter(
+      (candidate) =>
+        candidate.exists &&
+        (!primaryPath || !samePath(candidate.meta.dbPath, primaryPath)) &&
+        !attachedPaths.has(candidate.key)
+    )
+    .map((candidate) => ({
+      label: candidate.meta.name,
+      description: candidate.sources.map(formatCandidateSource).join(', '),
+      detail: candidate.meta.dbPath,
+      pickerType: 'candidate',
+      candidate,
+    }));
+  items.push({
+    label: 'Browse for index database...',
+    description: 'Choose an index.db file',
+    pickerType: 'browse',
+  });
 
   const picked = await vscode.window.showQuickPick(items, {
     placeHolder: 'Open a secondary index',
   });
   if (!picked) {
-    return null;
+    return { status: 'cancelled' };
   }
 
-  let dbPath = picked.dbPath;
-  if (picked.id === '__browse__') {
+  let dbPath = picked.candidate?.meta.dbPath;
+  if (picked.pickerType === 'browse') {
     const uri = await vscode.window.showOpenDialog({
       canSelectFiles: true,
       canSelectMany: false,
       filters: { Database: ['db'] },
     });
     if (!uri?.[0]) {
-      return null;
+      return { status: 'cancelled' };
     }
     dbPath = uri[0].fsPath;
   }
+  if (!dbPath) {
+    return { status: 'error', message: 'No index database was selected' };
+  }
 
-  const readOnly = await vscode.window.showQuickPick(
+  const access = await vscode.window.showQuickPick(
     [
-      { label: 'Read-only (recommended for libraries)', value: true },
-      { label: 'Writable', value: false },
+      {
+        label: 'Read-only (Recommended)',
+        description: 'Safe when another IDE owns or updates this index',
+        value: true,
+      },
+      {
+        label: 'Automatic single-writer',
+        description: 'Writable here only when no other IDE holds the writer lease',
+        value: false,
+      },
     ],
     { placeHolder: 'Open mode' }
   );
-  if (!readOnly) {
-    return null;
+  if (!access) {
+    return { status: 'cancelled' };
   }
 
   try {
-    await manager.attachSecondary(dbPath, {
-      name: picked.meta?.name,
-      readOnly: readOnly.value,
-      directoryMappings: picked.meta?.directoryMappings,
-      rootDirs: picked.meta?.rootDirs,
+    let rootDirs = picked.candidate?.meta.rootDirs ?? [];
+    if (!access.value && rootDirs.length === 0) {
+      const roots = await vscode.window.showOpenDialog({
+        canSelectFolders: true,
+        canSelectMany: true,
+        openLabel: 'Select source root(s) for this writable index',
+      });
+      if (!roots?.length) {
+        return { status: 'cancelled' };
+      }
+      rootDirs = roots.map((uri) => uri.fsPath);
+    }
+    const service = await manager.attachSecondary(dbPath, {
+      name: picked.candidate?.meta.name,
+      readOnly: access.value,
+      directoryMappings: picked.candidate?.meta.directoryMappings,
+      rootDirs,
+      waitForInitialIndex: false,
     });
-    return null;
+    startSecondaryIndexingInBackground(service, dbPath);
+    return { status: 'ok', message: 'Secondary index opened' };
   } catch (e) {
-    return e instanceof Error ? e.message : String(e);
+    return { status: 'error', message: errorMessage(e) };
   }
 }
 
@@ -393,9 +794,89 @@ export async function confirmAndDelete(
   return null;
 }
 
+export async function saveWorkspaceIndexBinding(
+  manager: IndexManager,
+  context: vscode.ExtensionContext,
+  primarySource?: PrimaryIndexSource,
+  options: {
+    removedSecondaryDbPaths?: readonly string[];
+  } = {}
+): Promise<WorkspaceIndexBindingV2> {
+  const previous = normalizeWorkspaceIndexBinding(
+    context.workspaceState.get<unknown>(
+      getWorkspaceIndexBindingKey(manager.getWorkspaceHash())
+    )
+  );
+  const primary = manager.getPrimary();
+  const primaryMeta = primary ? manager.getIndexMeta(primary.id) : undefined;
+  const primaryAccess = primary ? manager.getRuntimeAccess(primary.id) : undefined;
+  const previousSource =
+    primary && previous.primary && samePath(previous.primary.dbPath, primary.getDbPath())
+      ? previous.primary.source
+      : undefined;
+  const inferredSource: PrimaryIndexSource =
+    primary && manager.getSharedDbPath() && samePath(primary.getDbPath(), manager.getSharedDbPath()!)
+      ? 'shared'
+      : 'manual';
+
+  const attachedSecondaries = manager.getAttachedIndexes().map(({ meta, service }) => {
+    const runtime = manager.getRuntimeAccess(service.id);
+    return {
+      dbPath: meta.dbPath,
+      accessMode: accessModeFromRequested(runtime?.requestedReadOnly ?? service.isReadOnly()),
+      name: meta.name,
+      rootDirs: meta.rootDirs,
+      directoryMappings: meta.directoryMappings,
+    };
+  });
+  const binding = normalizeWorkspaceIndexBinding({
+    version: 2,
+    primary: primary
+      ? {
+          dbPath: primary.getDbPath(),
+          accessMode: accessModeFromRequested(primaryAccess?.requestedReadOnly ?? primary.isReadOnly()),
+          source: primarySource ?? previousSource ?? inferredSource,
+          name: primary.name,
+          rootDirs: primaryMeta?.rootDirs ?? primary.getRootDirs(),
+          directoryMappings: primaryMeta?.directoryMappings,
+        }
+      : previous.primary,
+    secondaries: mergeWorkspaceSecondaryBindings(
+      attachedSecondaries,
+      previous.secondaries,
+      options.removedSecondaryDbPaths
+    ),
+  });
+
+  await context.workspaceState.update(
+    getWorkspaceIndexBindingKey(manager.getWorkspaceHash()),
+    binding
+  );
+  // Keep the v1 IDs for downgrade compatibility. V2 paths remain authoritative
+  // because IDs are local to each editor's registry.
+  await context.workspaceState.update('secondaryIndexIds', manager.getWorkspaceSecondaryIds());
+  return binding;
+}
+
+function accessModeFromRequested(readOnly: boolean): IndexAccessMode {
+  return readOnly ? 'readOnly' : 'auto';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function startSecondaryIndexingInBackground(service: IndexService, dbPath: string): void {
+  void service.startIndexing().catch((error) => {
+    void vscode.window.showErrorMessage(
+      `Ace Code Search: Secondary indexing failed for ${dbPath} - ${errorMessage(error)}`
+    );
+  });
+}
+
 export async function saveSecondaryIds(
   manager: IndexManager,
   context: vscode.ExtensionContext
 ): Promise<void> {
-  await context.workspaceState.update('secondaryIndexIds', manager.getWorkspaceSecondaryIds());
+  await saveWorkspaceIndexBinding(manager, context);
 }

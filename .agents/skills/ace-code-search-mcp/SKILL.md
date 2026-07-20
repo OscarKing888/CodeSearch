@@ -19,20 +19,25 @@ The Skill alone does **not** expose tools. The agent session must have the Ace C
 If those tools are missing from the available tool list:
 
 1. Tell the user the MCP server is not connected (Skill guidance is not enough).
-2. For Codex (VS Code / CLI / desktop): ensure `[mcp_servers.ace-code-search]` exists in `~/.codex/config.toml` (or trusted project `.codex/config.toml`), then restart Codex or run `/mcp`.
-3. For Cursor: ensure `ace-code-search` exists in `~/.cursor/mcp.json`, then reload MCP.
-4. Fall back to `rg` / filesystem search only after stating that MCP tools are unavailable.
+2. For VS Code/Copilot, ensure the Ace Code Search extension is enabled; supported VS Code versions discover its MCP provider directly.
+3. For Codex, ensure `[mcp_servers.ace-code-search]` exists in `~/.codex/config.toml`, then restart Codex or run `/mcp`.
+4. For Cursor, ensure `ace-code-search` exists in `~/.cursor/mcp.json`, then reload MCP.
+5. Fall back to `rg` / filesystem search only after stating that MCP tools are unavailable.
 
-In Ace Code Search, the toolbar **Install project Agent Skill / Rule** command also writes the Codex/Cursor MCP client config pointing at this extension's `dist/mcp.js`.
+The toolbar **Install Agent Integration (Project Guidance + User MCP)** command installs the canonical project Skill under `.agents/skills`, thin Cursor/Claude routing files, and Codex/Cursor user MCP entries that point to a stable launcher under `~/.ace-code-search/`. It does not create a project `.codex/config.toml` or a `.github/instructions` file.
+
+The Codex/Cursor launcher requires `node` on the client PATH and the packaged VSIX guarantees Node.js 20, 22, and 24 ABIs. VS Code's dynamic provider uses the editor runtime instead and does not require a separate PATH Node.
 
 ## Workflow
 
-1. Call `list_indexes` when the target index is unknown.
-2. Select the index whose `rootDirs` contains the requested workspace. Pass its `id` as `indexId`; do not rely on duplicate names such as `Primary`.
+1. Call `list_indexes`; inspect both `indexes` and `warnings`.
+2. If more than one index is available, pass the matching `id` as `indexId`; do not rely on duplicate names such as `Primary`.
 3. Call `search_code` with the narrowest useful query and options.
 4. If needed, call `read_indexed_file` with the returned `localPath` and a small line range.
 5. Use `find_header_source` for indexed C/C++ header/source pairing.
-6. State that results come from an index snapshot when freshness matters. `partialIndex: true` means results may be incomplete.
+6. State that results come from an index snapshot when freshness matters. `partialIndex: true` means the persisted build state is incomplete, failed, or unknown.
+
+By default the server exposes only indexes whose mapped output roots are fully contained by the MCP client workspace roots (or `--workspace-root` / process cwd fallback). Parent or mixed-workspace indexes fail closed. `--all-indexes` is an explicit server-launch opt-in for intentional cross-workspace access.
 
 ## `search_code` matching parameters
 

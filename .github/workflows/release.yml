@@ -34,27 +34,26 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y python3 make g++ libsqlite3-dev
 
       - run: npm ci
-      - run: npm run build
-      - run: node scripts/rebuild-node.js
+      - run: npm run test:native
       - run: npm test
 
-  build-native:
+  build-electron-native:
     needs: test
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            artifact: native-linux-x64
+          - os: ubuntu-22.04
+            artifact: electron-native-linux-x64
             npm_config_arch: x64
-          - os: windows-latest
-            artifact: native-win32-x64
+          - os: windows-2022
+            artifact: electron-native-win32-x64
             npm_config_arch: x64
-          - os: macos-latest
-            artifact: native-darwin-arm64
+          - os: macos-15
+            artifact: electron-native-darwin-arm64
             npm_config_arch: arm64
-          - os: macos-latest
-            artifact: native-darwin-x64
+          - os: macos-15-intel
+            artifact: electron-native-darwin-x64
             npm_config_arch: x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -72,6 +71,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Verify native runner architecture
+        run: node -e "if (process.arch !== '${{ matrix.npm_config_arch }}') throw new Error('Expected ${{ matrix.npm_config_arch }} runner, got ' + process.arch)"
+
       - name: Rebuild better-sqlite3 for Electron
         run: node scripts/rebuild-electron.js all
         env:
@@ -84,8 +86,75 @@ jobs:
           path: native/
           if-no-files-found: error
 
+  build-node-native:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - version: 20
+            abi: 115
+          - version: 22
+            abi: 127
+          - version: 24
+            abi: 137
+        target:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: windows-2022
+            platform: win32
+            arch: x64
+          - os: macos-15
+            platform: darwin
+            arch: arm64
+          - os: macos-15-intel
+            platform: darwin
+            arch: x64
+    runs-on: ${{ matrix.target.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node.version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install native build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3 make g++ libsqlite3-dev
+
+      - run: npm ci
+
+      - name: Verify native runner architecture
+        run: node -e "if (process.arch !== '${{ matrix.target.arch }}') throw new Error('Expected ${{ matrix.target.arch }} runner, got ' + process.arch)"
+
+      - name: Rebuild better-sqlite3 for system Node
+        run: node scripts/rebuild-node.js
+        env:
+          npm_config_arch: ${{ matrix.target.arch }}
+          npm_config_target_arch: ${{ matrix.target.arch }}
+
+      - name: Verify runtime ABI selected by setup-node
+        shell: bash
+        run: |
+          ACTUAL_ABI=$(node -p "process.versions.modules")
+          if [ "$ACTUAL_ABI" != "${{ matrix.node.abi }}" ]; then
+            echo "::error::Node ${{ matrix.node.version }} has ABI $ACTUAL_ABI; expected ${{ matrix.node.abi }}"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-native-${{ matrix.target.platform }}-${{ matrix.target.arch }}-node${{ matrix.node.version }}
+          path: native-node/
+          if-no-files-found: error
+
   package:
-    needs: build-native
+    needs:
+      - build-electron-native
+      - build-node-native
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,8 +168,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: native-*
-          merge-multiple: true
+          pattern: '*-native-*'
 
       - name: Merge native binaries
         run: node scripts/merge-native-artifacts.js
@@ -132,6 +200,9 @@ jobs:
         run: |
           VSIX=$(node -p "require('./package.json').name + '-' + require('./package.json').version + '.vsix'")
           echo "path=$VSIX" >> "$GITHUB_OUTPUT"
+
+      - name: Validate packaged native matrices and load Node binding
+        run: node scripts/validate-vsix-native.js "${{ steps.vsix.outputs.path }}" --require-smoke
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')

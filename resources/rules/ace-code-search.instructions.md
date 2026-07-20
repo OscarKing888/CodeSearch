@@ -7,9 +7,8 @@ applyTo: "**"
 
 When locating code, symbols, text, files, references, or C/C++ header/source counterparts:
 
-1. Prefer the `ace-code-search-mcp` Skill and its MCP tools when the target workspace has an Ace Code Search index.
-2. Use `list_indexes` when the target index is unknown, then pass the matching index ID to `search_code`.
-3. Use `read_indexed_file` for indexed snapshots and `find_header_source` for indexed C/C++ pairing.
-4. Fall back to `rg`, filesystem search, or direct reads when no matching index exists, `partialIndex` is true and completeness matters, results may be stale, or the target is excluded/unindexed.
+1. Treat `.agents/skills/ace-code-search-mcp/SKILL.md` as the canonical project guidance when it exists.
+2. Prefer its MCP tools when `list_indexes` exposes an index for this workspace.
+3. Fall back to `rg`, filesystem search, or direct reads when the MCP server/index is unavailable, `partialIndex` is true and completeness matters, results may be stale, or the target is excluded/unindexed.
 
 Do not claim that indexed results reflect unsaved or not-yet-indexed changes.

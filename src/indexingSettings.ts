@@ -7,6 +7,21 @@ export interface IndexingSettings {
   indexThreads: number;
 }
 
+/**
+ * Safe, high-value Unreal generated/cache directories to call out in the UI.
+ * These are also present in the effective global defaults below. Keep this
+ * list focused: Unreal Source, Config, Plugins, Content, and Build can contain
+ * searchable scripts or build inputs and must not be advertised as universally
+ * disposable code exclusions.
+ */
+export const DEFAULT_UNREAL_CORE_EXCLUDE_DIR_NAMES = [
+  '.vs',
+  'Binaries',
+  'DerivedDataCache',
+  'Intermediate',
+  'Saved',
+] as const;
+
 export const DEFAULT_EXCLUDE_GLOBS = [
   '**/node_modules/**',
   '**/.git/**',

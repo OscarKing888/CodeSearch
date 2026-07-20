@@ -4,13 +4,38 @@ A VS Code extension that provides full-text code indexing and instant search pow
 
 ![Ace Code Search screenshot](https://raw.githubusercontent.com/OscarKing888/CodeSearch/main/doc/AceCodeSearch.png)
 
-![Class Viewer 截图](https://raw.githubusercontent.com/OscarKing888/CodeSearch/main/doc/CodeSearchClassViewer.png)
+![Class Viewer screenshot](https://raw.githubusercontent.com/OscarKing888/CodeSearch/main/doc/CodeSearchClassViewer.png)
 
 > **Independent Development Notice**
 >
 > This extension draws functional inspiration from the user experience of tools such as [Entrian Source Search](https://entrian.com/source-search/). However, all code, architecture, and implementation are independently designed and developed by this project. No third-party source code or proprietary assets were used. This project has no affiliation with or authorization from Entrian or its products.
 
 For detailed development notes, see [README_Dev.md](README_Dev.md).
+
+Requires VS Code 1.103 or newer. This is the first stable Electron 37 / native ABI 136 runtime covered by the packaged native matrix.
+
+## Shared Indexes Across VS Code and Cursor
+
+When VS Code and Cursor open the same folder or workspace on one machine, newly created workspace indexes default to one IDE-independent Primary database. Open **Manage Indexes** to see the workspace roots, Primary source, effective access mode, and shared database path.
+
+- **Shared Primary**: click **Use Shared Index**, or run **Ace Code Search: Choose Workspace Primary Index...**, to use the deterministic shared path; the picker also lists matching indexes auto-discovered from VS Code/Cursor registries
+- **Manual Primary**: choose any existing `index.db`; read-only is recommended for an existing database, or select **Automatic single-writer**
+- **Single-writer safety**: automatic mode uses `<index.db>.writer.lock` so only one IDE writes. Other IDEs automatically search the same database read-only and show the current writer in Manage Indexes. After the writer closes, an idle reader automatically takes over writes and starts incremental watching
+- **Crash recovery**: a well-formed writer lock whose owner process has exited is reclaimed automatically. If a compatibility create on an unusual filesystem leaves a malformed/incomplete `.writer.lock`, or termination during the shorter reclaim step leaves `.writer.lock.reclaim`, close every IDE using that index before manually deleting the corresponding orphan lock/guard. Both incomplete-file cases stay fail-safe rather than risking two writers
+- **Secondary indexes**: **Open Secondary...** opens an auto-discovered or manually selected database. Read-only is the default; automatic single-writer is available after reliable source roots are known. Open Secondaries participate in every search
+- **Safe readers**: a read-only index never scans roots, starts a watcher, migrates schema, or writes the database. Invalid databases fail before the active Primary is replaced
+- **Clear property scopes**: Manage Indexes emphasizes the Primary, keeps Secondaries subordinate, and separates `Index content` from `This workspace`. Effective Unreal defaults are shown read-only while Additional exclusions stay editable per index, so an empty custom field no longer hides that `Binaries`, `Intermediate`, and `Saved` are excluded
+- **Legacy compatibility**: existing VS Code/Cursor `globalStorage` indexes are neither moved nor deleted and continue to open as Legacy sources; `code-search.autocreate` still takes precedence and controls its configured path
+
+New shared database locations:
+
+- Windows: `%LOCALAPPDATA%\AceCodeSearch\indexes\<workspace-key>\index.db`
+- macOS: `~/Library/Application Support/AceCodeSearch/indexes/<workspace-key>/index.db`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/AceCodeSearch/indexes/<workspace-key>/index.db`
+
+`workspace-key` is derived from normalized, sorted workspace roots, so Windows path casing and multi-root order do not split VS Code and Cursor onto different databases.
+
+See [README_Dev.md — Cross-IDE Primary binding and compatibility](README_Dev.md#cross-ide-primary-binding-and-compatibility) for startup precedence, compatibility migration, and the verification matrix.
 
 ## Large Workspace Performance
 
@@ -68,7 +93,7 @@ Ace Code Search uses **pre-indexed, persistent full-text search**. For repeated 
 - **Incremental updates**: VS Code/Cursor use native file watchers (CLI keeps chokidar); unchanged files are skipped via `mtime`; add/change/delete triggers per-file re-indexing; include/exclude rules are compiled once
 - **Index/search coordination**: file watching and indexing pause during search, then drain queued events in batches; batch commits (every 100 files) and configurable **multi-threaded reads** (`codeSearch.indexThreads`) speed up initial builds
 - **Streaming result delivery**: first 50 hits paint quickly; later batches use webview ACK backpressure so large result sets stay responsive
-- **Local persistence**: Indexes live in a SQLite database under `globalStorage` (WAL mode), so restarts do not require a full rebuild unless you force refresh or files changed
+- **Local persistence**: New workspace indexes live in a cross-IDE application-data directory (WAL mode); legacy `globalStorage` indexes remain compatible, and restarts do not unconditionally rebuild them
 - **Configurable excludes**: Defaults skip `node_modules`, `dist`, binaries, and more to keep indexes smaller and builds shorter
 
 Compared to built-in search: built-in is fine for ad-hoc, small-scope lookups; this extension targets **frequent symbol and full-text search**, with sub-second results common once indexing is warm. See [README_Dev.md — Indexing & search algorithm](README_Dev.md#索引与搜索算法).
@@ -99,39 +124,45 @@ There is currently no dedicated strict `wholeWord` parameter; search a complete 
 
 ### Discovery and read-only behavior
 
-- With no arguments, the server auto-discovers Ace Code Search registries in VS Code and Cursor `globalStorage`
-- Use `--registry <registry.json>` or `--db <index.db>` for an explicit source
+- With no arguments, the server tolerantly discovers VS Code/Cursor `globalStorage` registries; broken automatic sources are reported in `list_indexes.warnings` instead of aborting startup
+- By default it exposes only indexes fully contained by MCP client roots (then `--workspace-root` / cwd). Parent or mixed-root indexes fail closed; cross-workspace access requires explicit `--all-indexes`
+- Use strict `--registry <registry.json>` or explicitly authorized `--db <index.db>` sources; when more than one index is visible, pass `indexId`
 - MCP never indexes, starts watchers, or writes databases/registries
-- Results are **index snapshots**; use direct reads or `rg` when `partialIndex: true`, unsaved changes matter, content is not indexed yet, or files are excluded
+- Primary/Secondary selection and writer leases are intentionally editor-side management operations, not MCP mutation tools; MCP only opens registered shared/manual databases read-only and never creates `.writer.lock`
+- Results are **index snapshots**. Persisted build states other than `complete` return `partialIndex: true`; use direct reads or `rg` when unsaved changes matter, content is not indexed yet, or files are excluded
 
 ```bash
 npm run mcp
 npm run mcp -- --db /path/to/index.db
-npm run mcp -- --registry /path/to/registry.json
+npm run mcp -- --registry /path/to/registry.json --workspace-root /path/to/workspace
+# Only for intentional cross-workspace access: npm run mcp -- --all-indexes
 ```
 
 ### Skill and search-preference guidance
 
-The toolbar **Install project Agent Skill / Rule / MCP** button (or command **Ace Code Search: Install Project Agent Skill, Rule, and MCP Config**) writes:
+The toolbar document-check button (or **Ace Code Search: Install Agent Integration (Project Guidance + User MCP)**) writes:
 
-- Project Skill (Codex): `.agents/skills/ace-code-search-mcp`
-- Project Skill (Cursor): `.cursor/skills/ace-code-search-mcp`
-- Project Rule (Cursor): `.cursor/rules/ace-code-search-first.mdc`
-- Project Instruction (VS Code Copilot): `.github/instructions/ace-code-search.instructions.md`
-- **Codex MCP**: `[mcp_servers.ace-code-search]` in `~/.codex/config.toml` (and project `.codex/config.toml`)
-- **Cursor MCP**: `ace-code-search` in `~/.cursor/mcp.json`
+- The only full project Skill: `.agents/skills/ace-code-search-mcp/SKILL.md`
+- Thin Cursor routing Rule: `.cursor/rules/ace-code-search-first.mdc`
+- Thin Claude compatibility wrapper: `.claude/skills/ace-code-search-mcp/SKILL.md`
+- Stable user launcher: `~/.ace-code-search/mcp-launcher.cjs` (discovers the newest installed extension on every launch)
+- Codex/Cursor user configs: `~/.codex/config.toml` and `~/.cursor/mcp.json`
+- Supported VS Code versions discover the extension's `ace-code-search.mcp-servers` provider directly
 
 > A Skill only documents usage. **Without an MCP server registration, the session will not expose** `list_indexes` / `search_code`. After install, restart Codex (or run `/mcp`) and retry.
+>
+> Codex/Cursor launcher configs require `node` on the client PATH; packaged native bindings cover Node.js 20, 22, and 24. VS Code's dynamic provider uses the editor runtime and does not need a separate PATH Node.
 
-Commit the Skill/Rule files so the team picks them up. The extension does **not** write them silently on activation.
+Keep the full Skill only in `.agents`; it is no longer copied into `.cursor/skills`. The normal install does **not** create project `.codex/config.toml` or `.github/instructions`, and activation never writes silently. User-modified files, invalid markers, and custom MCP entries are preserved with warnings.
 
 The Instruction/Rule prefers Ace Code Search MCP when a matching index exists, but falls back to `rg`/filesystem search when the index is missing, incomplete, stale, or excludes the target.
 
 Optional personal command:
 
+- **Ace Code Search: Install Optional VS Code Copilot Search Instruction** — explicitly opts into a project `.github/instructions` wrapper
 - **Ace Code Search: Copy Cursor User Rule (Personal)** — for Cursor Settings → User Rules only
 
-> Skill/Rule distribution previously required a separate MCP registration step; the toolbar install now also writes Codex/Cursor MCP client config. See [README_Dev.md — MCP (AI Agent)](README_Dev.md#mcp-ai-agent).
+> Verifiably managed, unmodified legacy project `.cursor/skills`, project `.codex`, and default `.github/instructions` files are migrated/removed; personal client copies and files of uncertain ownership are retained. See [README_Dev.md — MCP (AI Agent)](README_Dev.md#mcp-ai-agent).
 
 ## Feature List
 
@@ -140,22 +171,23 @@ Optional personal command:
 | Category | Feature | Status |
 |----------|---------|--------|
 | **Indexing** | Configurable root full-text indexing | ✅ Workspace roots + `code-search.autocreate` for custom roots |
-| | Multi-root / secondary read-only indexes / path mapping | ✅ Secondary indexes + directory mapping |
+| | Shared VS Code/Cursor Primary / manual Primary / single writer | ✅ Shared path + auto-discovery + read-only fallback |
+| | Multi-root / Secondary indexes / path mapping | ✅ Read-only or automatic single-writer Secondaries + path mapping |
 | | Incremental updates (file watcher) | ✅ VS Code native watcher (chokidar for CLI) |
 | | Low-priority background throttling (Be extra nice) | ⬜ Planned |
 | | Binary exclusion / configurable excludes | ✅ Binary detection + `excludeGlobs` |
 | | Automatic `.gitignore` respect | ⬜ Planned (default exclude rules for now) |
-| | Per-index include/exclude | 🟡 Supported via autocreate JSON, no full UI |
+| | Per-index include/exclude | 🟡 Excludes have Advanced UI; includes remain autocreate/global configuration |
 | | Index status (Scanning / Indexing / Up to date) | ✅ Status bar + toolbar |
 | | Index queue detail tooltip | ⬜ Planned |
 | | Search while partially indexed | ✅ |
 | | Force refresh | ✅ Command palette full rebuild |
 | | Changed-only / all-files refresh modes | ⬜ Planned |
-| | Index management (create / delete / move / rename) | ✅ Dedicated management panel (editor tab) |
+| | Index management (Primary source / search scope / create / forget / rename) | ✅ Redesigned management panel (editor tab) |
 | | `code-search.autocreate` config file | ✅ JSON auto-create |
 | | Ace Code Search CLI | ✅ `npm run cli` / `ess.bat` |
 | **AI Agent** | Read-only stdio MCP | ✅ Index discovery, search, snapshot reads, header/source pairing |
-| | Skill / search-preference guidance | ✅ Writes into the current project (Codex `.agents` + Cursor/VS Code) |
+| | Skill / search-preference guidance | ✅ One `.agents` Skill + thin Cursor/Claude wrappers; VS Code Instruction is opt-in |
 | **Search** | Single / multi-word / phrase | ✅ |
 | | Wildcard `*` (word-level) | ✅ |
 | | Wildcards (inline / cross-line) `"this * that"` / `"this *:100 that"` | ✅ |
@@ -200,6 +232,7 @@ Legend: ✅ Done · 🟡 Partial · ⬜ Planned
 | Manage Indexes | Toolbar ⚙ |
 | Install Agent Skill / Rule | Toolbar document-check icon / command palette (writes into the current project) |
 | Show Class Inheritance Tree | Toolbar hierarchy icon / command palette |
+| Choose Workspace Primary Index | Command palette |
 | Open Secondary Index | Command palette |
 
 ## Install & Build

@@ -1,51 +1,82 @@
 const fs = require('fs');
 const path = require('path');
+const {
+  NATIVE_BINARY_NAME,
+  expectedElectronTags,
+  expectedNodeTags,
+} = require('./native-matrix');
 
 const ROOT = path.join(__dirname, '..');
-const NATIVE_DIR = process.argv[2]
-  ? path.resolve(process.argv[2])
-  : path.join(ROOT, 'native');
-const BINARY_NAME = 'better_sqlite3.node';
 
-const REQUIRED_ABIS = ['136', '143', '146'];
-const REQUIRED_TARGETS = [
-  { platform: 'linux', arch: 'x64' },
-  { platform: 'win32', arch: 'x64' },
-  { platform: 'darwin', arch: 'arm64' },
-  { platform: 'darwin', arch: 'x64' },
-];
+function resolveDirectories(argv) {
+  const rootArg = argv[2] ? path.resolve(argv[2]) : ROOT;
+  if (path.basename(rootArg) === 'native') {
+    return {
+      nativeDir: rootArg,
+      nativeNodeDir: path.join(path.dirname(rootArg), 'native-node'),
+    };
+  }
+  return {
+    nativeDir: path.join(rootArg, 'native'),
+    nativeNodeDir: path.join(rootArg, 'native-node'),
+  };
+}
 
-function expectedTags() {
-  const tags = [];
-  for (const target of REQUIRED_TARGETS) {
-    for (const abi of REQUIRED_ABIS) {
-      tags.push(`${target.platform}-${target.arch}-${abi}`);
+function validateDirectory(dir, tags, label) {
+  const missing = [];
+  const empty = [];
+  for (const tag of tags) {
+    const binaryPath = path.join(dir, tag, NATIVE_BINARY_NAME);
+    if (!fs.existsSync(binaryPath)) {
+      missing.push(binaryPath);
+      continue;
+    }
+    if (fs.statSync(binaryPath).size === 0) {
+      empty.push(binaryPath);
     }
   }
-  return tags;
+  return { label, dir, expected: tags.length, missing, empty };
+}
+
+function validateNativeArtifacts(rootOrNativeDir) {
+  const argv = ['node', 'validate-native-artifacts.js'];
+  if (rootOrNativeDir) {
+    argv.push(rootOrNativeDir);
+  }
+  const { nativeDir, nativeNodeDir } = resolveDirectories(argv);
+  const results = [
+    validateDirectory(nativeDir, expectedElectronTags(), 'Electron'),
+    validateDirectory(nativeNodeDir, expectedNodeTags(), 'Node'),
+  ];
+  const failures = results.flatMap((result) => [
+    ...result.missing.map((file) => ({ kind: 'missing', label: result.label, file })),
+    ...result.empty.map((file) => ({ kind: 'empty', label: result.label, file })),
+  ]);
+  return { results, failures };
 }
 
 function main() {
-  const missing = [];
-
-  for (const tag of expectedTags()) {
-    const binaryPath = path.join(NATIVE_DIR, tag, BINARY_NAME);
-    if (!fs.existsSync(binaryPath)) {
-      missing.push(path.relative(ROOT, binaryPath));
-    }
-  }
-
-  if (missing.length > 0) {
-    console.error('Missing required better-sqlite3 native binaries:');
-    for (const file of missing) {
-      console.error(`  - ${file}`);
+  const rootArg = process.argv[2] ? path.resolve(process.argv[2]) : ROOT;
+  const validation = validateNativeArtifacts(rootArg);
+  if (validation.failures.length > 0) {
+    console.error('Invalid required better-sqlite3 native matrix:');
+    for (const failure of validation.failures) {
+      console.error(
+        `  - [${failure.label}] ${failure.kind}: ${path.relative(ROOT, failure.file)}`
+      );
     }
     process.exit(1);
   }
 
-  console.log(
-    `Validated ${REQUIRED_TARGETS.length * REQUIRED_ABIS.length} native binaries in ${path.relative(ROOT, NATIVE_DIR) || '.'}.`
-  );
+  for (const result of validation.results) {
+    console.log(
+      `Validated ${result.expected} ${result.label} binaries in ${path.relative(ROOT, result.dir) || '.'}.`
+    );
+  }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { validateNativeArtifacts };

@@ -10,7 +10,7 @@ import * as path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { parseMcpCliArgs } from './discover';
+import { fileUriToWorkspacePath, parseMcpCliArgs } from './discover';
 import { McpIndexSession } from './session';
 import { McpToolHandlers } from './tools';
 
@@ -27,11 +27,13 @@ function printHelp(): void {
   console.error(`Ace Code Search MCP (stdio)
 
 Usage:
-  node dist/mcp.js [--registry <registry.json>] [--db <index.db>] [--extension-root <dir>]
+  node dist/mcp.js [--registry <registry.json>] [--db <index.db>] [--workspace-root <dir>]
 
 Options:
   --registry         Path to Ace Code Search registry.json
   --db               Open a single index database (read-only)
+  --workspace-root   Static workspace scope fallback (repeatable; default: cwd)
+  --all-indexes      Explicitly allow indexes outside the workspace scope
   --extension-root   Extension/repo root for better-sqlite3 native resolution
   --help             Show this help
 
@@ -54,10 +56,57 @@ async function main(): Promise<void> {
   const handlers = new McpToolHandlers(session);
   const version = readPackageVersion();
 
-  const server = new McpServer({
-    name: 'ace-code-search',
-    version,
-  });
+  const server = new McpServer(
+    {
+      name: 'ace-code-search',
+      version,
+    },
+    {
+      instructions:
+        'Call list_indexes first, choose the matching workspace index by id, then pass indexId to search_code/read_indexed_file/find_header_source. Results are read-only index snapshots; partialIndex means incomplete or unknown completion state.',
+    }
+  );
+
+  let clientScopeRefresh: Promise<void> | undefined;
+  const ensureClientWorkspaceScope = async (): Promise<void> => {
+    if (options.db || options.allIndexes) {
+      return;
+    }
+    if (!clientScopeRefresh) {
+      clientScopeRefresh = (async () => {
+        if (!server.server.getClientCapabilities()?.roots) {
+          return;
+        }
+        try {
+          const result = await server.server.listRoots();
+          const roots = result.roots
+            .map((root) => fileUriToWorkspacePath(root.uri))
+            .filter((root): root is string => Boolean(root));
+          if (roots.length > 0) {
+            await session.setWorkspaceRoots(roots);
+          } else {
+            session.recordWarning(
+              'The MCP client reported no usable file:// roots; using the static workspace scope fallback.'
+            );
+          }
+        } catch (error) {
+          session.recordWarning(
+            `Could not read MCP client roots; using the static workspace scope fallback: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      })();
+    }
+    await clientScopeRefresh;
+  };
+
+  const readOnlyAnnotations = {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  } as const;
 
   server.registerTool(
     'list_indexes',
@@ -65,8 +114,12 @@ async function main(): Promise<void> {
       title: 'List Indexes',
       description:
         'List Ace Code Search SQLite indexes available to this MCP session (id, name, dbPath, roots, token count).',
+      annotations: readOnlyAnnotations,
     },
-    async () => handlers.listIndexes()
+    async () => {
+      await ensureClientWorkspaceScope();
+      return handlers.listIndexes();
+    }
   );
 
   server.registerTool(
@@ -86,8 +139,12 @@ async function main(): Promise<void> {
         loose: z.boolean().optional(),
         looseGap: z.number().int().min(1).max(500).optional(),
       },
+      annotations: readOnlyAnnotations,
     },
-    async (args) => handlers.searchCode(args)
+    async (args) => {
+      await ensureClientWorkspaceScope();
+      return handlers.searchCode(args);
+    }
   );
 
   server.registerTool(
@@ -103,8 +160,12 @@ async function main(): Promise<void> {
         endLine: z.number().int().min(1).optional(),
         maxChars: z.number().int().min(1).max(500000).optional(),
       },
+      annotations: readOnlyAnnotations,
     },
-    async (args) => handlers.readIndexedFile(args)
+    async (args) => {
+      await ensureClientWorkspaceScope();
+      return handlers.readIndexedFile(args);
+    }
   );
 
   server.registerTool(
@@ -117,8 +178,12 @@ async function main(): Promise<void> {
         path: z.string().describe('Header or source file path'),
         indexId: z.string().optional(),
       },
+      annotations: readOnlyAnnotations,
     },
-    async (args) => handlers.findHeaderSource(args)
+    async (args) => {
+      await ensureClientWorkspaceScope();
+      return handlers.findHeaderSource(args);
+    }
   );
 
   const transport = new StdioServerTransport();

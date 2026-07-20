@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { SearchOptions } from '../types';
+import { pathComparisonKey } from './discover';
 import { DEFAULT_MCP_SEARCH_OPTIONS, McpIndexSession, OpenedIndex } from './session';
 
 export type McpToolResult = {
@@ -20,20 +21,23 @@ function toolJson(data: unknown): McpToolResult {
   };
 }
 
-function mergeSearchOptions(partial?: Partial<SearchOptions>): SearchOptions {
+export function mergeSearchOptions(partial?: Partial<SearchOptions>): SearchOptions {
+  const defined = Object.fromEntries(
+    Object.entries(partial ?? {}).filter(([, value]) => value !== undefined)
+  ) as Partial<SearchOptions>;
   return {
     ...DEFAULT_MCP_SEARCH_OPTIONS,
-    ...partial,
+    ...defined,
     maxResults: Math.min(
-      Math.max(partial?.maxResults ?? DEFAULT_MCP_SEARCH_OPTIONS.maxResults, 1),
+      Math.max(defined.maxResults ?? DEFAULT_MCP_SEARCH_OPTIONS.maxResults, 1),
       10000
     ),
     contextLines: Math.min(
-      Math.max(partial?.contextLines ?? DEFAULT_MCP_SEARCH_OPTIONS.contextLines, 0),
+      Math.max(defined.contextLines ?? DEFAULT_MCP_SEARCH_OPTIONS.contextLines, 0),
       10
     ),
     looseGap: Math.min(
-      Math.max(partial?.looseGap ?? DEFAULT_MCP_SEARCH_OPTIONS.looseGap, 1),
+      Math.max(defined.looseGap ?? DEFAULT_MCP_SEARCH_OPTIONS.looseGap, 1),
       500
     ),
   };
@@ -42,40 +46,56 @@ function mergeSearchOptions(partial?: Partial<SearchOptions>): SearchOptions {
 function resolveFileInIndex(
   opened: OpenedIndex,
   filePath: string,
-  mapPath: (p: string) => string
+  session: McpIndexSession
 ): { indexedPath: string; mappedPath: string } | undefined {
   const db = opened.service.getDatabase();
   if (!db) {
     return undefined;
   }
 
-  const candidates = [
-    filePath,
-    path.resolve(filePath),
-    filePath.replace(/\\/g, '/'),
-    path.resolve(filePath).replace(/\\/g, '/'),
-  ];
+  // localPath is the normal value returned to agents. Reverse directory
+  // mappings first, then query indexed paths directly; never scan every row.
+  const reversed = session.unmapPath(opened, filePath);
+  const rawCandidates = [reversed, path.resolve(reversed), filePath, path.resolve(filePath)];
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of rawCandidates) {
+    for (const variant of [candidate, candidate.replace(/\\/g, '/')]) {
+      // Keep separator variants for the exact SQLite lookup. pathComparisonKey
+      // intentionally treats them as equivalent, while the BINARY path index does not.
+      const key = process.platform === 'win32' ? variant.toLowerCase() : variant;
+      if (!seen.has(key)) {
+        seen.add(key);
+        candidates.push(variant);
+      }
+    }
+  }
 
-  const stmt = db.prepare('SELECT path FROM files WHERE path = ? COLLATE NOCASE');
+  // The exact lookup uses the UNIQUE BINARY path index. This is the common
+  // path for localPath values returned by search_code.
+  const stmt = db.prepare('SELECT path FROM files WHERE path = ?');
   for (const candidate of candidates) {
     const row = stmt.get(candidate) as { path: string } | undefined;
     if (row) {
       return {
         indexedPath: row.path,
-        mappedPath: mapPath(row.path),
+        mappedPath: session.mapPath(opened, row.path),
       };
     }
   }
 
-  const normalized = path.resolve(filePath).replace(/\\/g, '/').toLowerCase();
-  const rows = db.prepare('SELECT path FROM files').all() as Array<{ path: string }>;
-  for (const row of rows) {
-    const mapped = mapPath(row.path).replace(/\\/g, '/').toLowerCase();
-    if (mapped === normalized || row.path.replace(/\\/g, '/').toLowerCase() === normalized) {
-      return {
-        indexedPath: row.path,
-        mappedPath: mapPath(row.path),
-      };
+  // Windows paths are case-insensitive. Keep this compatibility fallback last
+  // because COLLATE NOCASE may not use an older database's BINARY path index.
+  if (process.platform === 'win32') {
+    const insensitive = db.prepare('SELECT path FROM files WHERE path = ? COLLATE NOCASE');
+    for (const candidate of candidates) {
+      const row = insensitive.get(candidate) as { path: string } | undefined;
+      if (row) {
+        return {
+          indexedPath: row.path,
+          mappedPath: session.mapPath(opened, row.path),
+        };
+      }
     }
   }
 
@@ -113,6 +133,8 @@ export class McpToolHandlers {
   listIndexes(): McpToolResult {
     return toolJson({
       indexes: this.session.listIndexes(),
+      workspaceRoots: this.session.getWorkspaceRoots(),
+      warnings: this.session.listWarnings(),
       note: 'Results come from Ace Code Search SQLite index snapshots, not a live filesystem walk.',
     });
   }
@@ -134,7 +156,6 @@ export class McpToolHandlers {
         looseGap: args.looseGap,
       });
 
-      const perIndexLimit = Math.ceil(options.maxResults / Math.max(targets.length, 1));
       const hits: Array<{
         path: string;
         localPath: string;
@@ -155,12 +176,14 @@ export class McpToolHandlers {
       for (const opened of targets) {
         const result = opened.searcher.search(args.query, {
           ...options,
-          maxResults: perIndexLimit,
+          // A sparse first index must not consume an averaged quota and cause
+          // the combined result to under-fill maxResults.
+          maxResults: options.maxResults,
         });
         partialIndex = partialIndex || result.partialIndex;
         for (const hit of result.hits) {
           const localPath = this.session.mapPath(opened, hit.path);
-          const key = `${localPath}:${hit.line}:${hit.matchStart}`;
+          const key = `${pathComparisonKey(localPath)}:${hit.line}:${hit.matchStart}`;
           if (seen.has(key)) {
             continue;
           }
@@ -221,8 +244,7 @@ export class McpToolHandlers {
       const maxChars = Math.min(Math.max(args.maxChars ?? 100_000, 1), 500_000);
 
       for (const opened of targets) {
-        const mapPath = (p: string) => this.session.mapPath(opened, p);
-        const resolved = resolveFileInIndex(opened, args.path, mapPath);
+        const resolved = resolveFileInIndex(opened, args.path, this.session);
         if (!resolved) {
           continue;
         }
@@ -291,7 +313,7 @@ export class McpToolHandlers {
 
       for (const opened of targets) {
         const mapPath = (p: string) => this.session.mapPath(opened, p);
-        const resolved = resolveFileInIndex(opened, args.path, mapPath);
+        const resolved = resolveFileInIndex(opened, args.path, this.session);
         const lookupPath = resolved?.indexedPath ?? args.path;
         const counterparts = opened.service
           .findHeaderSourceCounterparts(lookupPath)

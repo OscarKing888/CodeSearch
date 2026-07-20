@@ -3,6 +3,7 @@
 .agents/**
 .codex/**
 .copilot/**
+.claude/**
 .vscode-test/**
 .github/**
 .tools/**

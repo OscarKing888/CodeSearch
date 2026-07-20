@@ -44,6 +44,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   private readonly profileSessions = new Map<number, SearchProfileSession>();
   private readonly profileFinalizations = new Map<number, Promise<string | undefined>>();
   private hierarchyCache: ClassHierarchyCacheManager | undefined;
+  private readonly onIndexStatusChanged = () => this.sendIndexStatus();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -52,6 +53,8 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     private workspaceRoots: string[],
     private readonly context: vscode.ExtensionContext
   ) {
+    this.indexManager.on('progress', this.onIndexStatusChanged);
+    this.indexManager.on('indexesChanged', this.onIndexStatusChanged);
     this.bindHierarchyCache();
     ClassHierarchyPanel.register(
       context,
@@ -68,7 +71,11 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     searchService: MultiIndexSearchService,
     workspaceRoots: string[]
   ): void {
+    this.indexManager.off('progress', this.onIndexStatusChanged);
+    this.indexManager.off('indexesChanged', this.onIndexStatusChanged);
     this.indexManager = indexManager;
+    this.indexManager.on('progress', this.onIndexStatusChanged);
+    this.indexManager.on('indexesChanged', this.onIndexStatusChanged);
     this.searchService = searchService;
     this.workspaceRoots = workspaceRoots;
     void this.hierarchyCache?.dispose();
@@ -78,6 +85,8 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   }
 
   async dispose(): Promise<void> {
+    this.indexManager.off('progress', this.onIndexStatusChanged);
+    this.indexManager.off('indexesChanged', this.onIndexStatusChanged);
     await this.disposeActiveSearches();
     this.view = undefined;
     this.webviewReady = false;
@@ -210,8 +219,6 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    this.indexManager.on('progress', () => this.sendIndexStatus());
-    this.indexManager.on('indexesChanged', () => this.sendIndexStatus());
   }
 
   searchInNewTab(): void {
@@ -1364,7 +1371,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       </svg>
     </button>
     <button class="btn" id="btnManage" title="Manage indexes">⚙</button>
-    <button class="btn" id="btnInstallGuidance" title="Install project Agent Skill / Rule / MCP" aria-label="Install project Agent Skill / Rule / MCP">
+    <button class="btn" id="btnInstallGuidance" title="Install Agent integration (project guidance + user MCP)" aria-label="Install Agent integration (project guidance + user MCP)">
       <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M4.5 2.5h5.2L12.5 5.3V13.5H4.5z"></path>
         <path d="M9.5 2.5V5.3H12.5"></path>

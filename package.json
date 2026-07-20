@@ -2,7 +2,7 @@
   "name": "ace-code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -15,7 +15,7 @@
     "url": "https://github.com/OscarKing888/CodeSearch.git"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.103.0"
   },
   "categories": [
     "Other"
@@ -28,6 +28,12 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "ace-code-search.mcp-servers",
+        "label": "Ace Code Search"
+      }
+    ],
     "viewsContainers": {
       "panel": [
         {
@@ -97,7 +103,11 @@
       },
       {
         "command": "codeSearch.installAgentSkill",
-        "title": "Ace Code Search: Install Project Agent Skill, Rule, and MCP Config"
+        "title": "Ace Code Search: Install Agent Integration (Project Guidance + User MCP)"
+      },
+      {
+        "command": "codeSearch.installVscodeCopilotInstruction",
+        "title": "Ace Code Search: Install Optional VS Code Copilot Search Instruction"
       },
       {
         "command": "codeSearch.copyCursorUserRule",
@@ -108,8 +118,12 @@
         "title": "Ace Code Search: Open Secondary Index"
       },
       {
+        "command": "codeSearch.selectPrimaryIndex",
+        "title": "Ace Code Search: Choose Workspace Primary Index..."
+      },
+      {
         "command": "codeSearch.createIndex",
-        "title": "Ace Code Search: Create Index"
+        "title": "Ace Code Search: Create Secondary Index..."
       },
       {
         "command": "codeSearch.searchInNewTab",
@@ -336,10 +350,22 @@
             9,
             10,
             11,
-            12
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24
           ],
           "enumItemLabels": [
-            "自动（本机 12 线程）",
+            "自动（本机 24 线程）",
             "1 线程",
             "2 线程",
             "3 线程",
@@ -351,9 +377,21 @@
             "9 线程",
             "10 线程",
             "11 线程",
-            "12 线程（全部）"
+            "12 线程",
+            "13 线程",
+            "14 线程",
+            "15 线程",
+            "16 线程",
+            "17 线程",
+            "18 线程",
+            "19 线程",
+            "20 线程",
+            "21 线程",
+            "22 线程",
+            "23 线程",
+            "24 线程（全部）"
           ],
-          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (12 detected at build time; runtime auto always uses live CPU count)."
+          "description": "Concurrent file-read threads during indexing. Auto uses all logical processors on this machine (24 detected at build time; runtime auto always uses live CPU count)."
         }
       }
     }
@@ -369,7 +407,8 @@
     "validate:native": "node scripts/validate-native-artifacts.js",
     "version:bump": "node scripts/bump-version.js",
     "package": "vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
-    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts && npx ts-node test/classHierarchy.test.ts && npx ts-node test/classHierarchyCacheStore.test.ts && npx ts-node test/classHierarchyWorkerPool.test.ts && npx ts-node test/classHierarchyTreeState.test.ts && npx ts-node test/classHierarchyCacheManager.test.ts && npx ts-node test/mcpTools.test.ts && npx ts-node test/mcpConfigInstaller.test.ts && npx ts-node test/agentSkillInstaller.test.ts && npx ts-node test/agentRuleInstaller.test.ts",
+    "test:native": "npm run build && npm run rebuild:node && npx ts-node test/nativeExtensionRoot.test.ts && npx ts-node test/nativeArtifactScripts.test.ts && npx ts-node test/nativeVsixValidator.test.ts && npx ts-node test/nativeCliSmoke.test.ts",
+    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/indexingSettings.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/indexCatalog.test.ts && npx ts-node test/sharedIndexStorage.test.ts && npx ts-node test/workspaceIndexBinding.test.ts && npx ts-node test/workspaceOperationGuard.test.ts && npx ts-node test/indexWriterLease.test.ts && npx ts-node test/indexDiscovery.test.ts && npx ts-node test/indexRegistry.test.ts && npx ts-node test/indexPresence.test.ts && npx ts-node test/startupPrimarySelection.test.ts && npx ts-node test/indexManager.test.ts && npx ts-node test/indexServiceDispose.test.ts && npx ts-node test/indexServiceRecovery.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts && npx ts-node test/classHierarchy.test.ts && npx ts-node test/classHierarchyCacheStore.test.ts && npx ts-node test/classHierarchyWorkerPool.test.ts && npx ts-node test/classHierarchyTreeState.test.ts && npx ts-node test/classHierarchyCacheManager.test.ts && npx ts-node test/mcpTools.test.ts && npx ts-node test/mcpConfigInstaller.test.ts && npx ts-node test/agentSkillInstaller.test.ts && npx ts-node test/agentRuleInstaller.test.ts && npx ts-node test/vscodeMcpProvider.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js",
     "mcp": "node dist/mcp.js"
@@ -393,6 +432,8 @@
     "minimatch": "^10.0.1",
     "sharp": "^0.35.3",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "yauzl": "^3.2.1",
+    "yazl": "^2.2.2"
   }
 }

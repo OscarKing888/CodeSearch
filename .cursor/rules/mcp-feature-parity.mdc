@@ -11,8 +11,9 @@ When adding or changing Ace Code Search capabilities that agents should use (sea
 2. Prefer reusing existing `SearchService` / `IndexService` APIs; keep MCP read-only (no indexing, registry writes, or watchers).
 3. Extend `test/mcpTools.test.ts` for new tools, parameters, filters, or result fields.
 4. Sync agent docs in the same change:
-   - `.cursor/skills/ace-code-search-mcp/SKILL.md`
-   - `resources/skills/ace-code-search-mcp/SKILL.md` (must stay byte-identical)
+   - `.agents/skills/ace-code-search-mcp/SKILL.md`
+   - `resources/skills/ace-code-search-mcp/SKILL.md` (must stay byte-identical to the canonical `.agents` copy)
+   - IDE-specific `.cursor` / `.claude` files must stay thin routing wrappers, not duplicate the full Skill
    - `.cursor/rules/ace-code-search-first.mdc` and packaged guidance under `resources/rules/` when discovery defaults change
    - `AGENTS.md` / `README_Dev.md` for MCP behavior notes
 5. If a feature is UI-only or unsafe for agents, explicitly document that it is out of MCP scope instead of silently omitting it.

@@ -5,23 +5,35 @@ All notable changes to the Ace Code Search extension are documented in this file
 ## Unreleased
 
 ### Added
+- Add an IDE-independent workspace Primary path shared by VS Code and Cursor, automatic matching-index discovery across both editor registries, manual `index.db` Primary selection, and path-based Primary/Secondary workspace bindings.
+- Add per-database single-writer leases with automatic read-only fallback/takeover, writer-owner status, safe read-only schema validation, restored Secondary access modes, and fail-safe orphan reclaim-guard handling.
+- Redesign Manage Indexes around a dominant Primary, subordinate Secondaries, a single scoped property inspector, and a lower-priority Available list; inherited/global exclusion rules now visibly include the effective Unreal defaults while per-index additions remain separate.
 - Add a workspace-wide C++/UE class inheritance panel that opens without a prior search, caches declarations incrementally in each writable index, and preserves read-only legacy-index compatibility through an in-memory fallback.
 - Add hierarchy/context SVG toolbar icons, filter-clear selection reveal, and subclass expand/collapse actions in the class-row context menu.
-- Install the Ace Code Search MCP Agent Skill for both Cursor and VS Code/Copilot from one managed `~/.agents/skills` copy, with client-specific compatibility wrappers and a manual repair command.
-- Add always-on guidance to prefer indexed Ace Code Search for code discovery, with a managed VS Code personal Instruction and a copy helper for Cursor User Rules.
-- Add a search toolbar button that installs/repairs **project-scoped** Agent Skill and search guidance (`.agents/skills`, `.cursor/skills`, `.cursor/rules`, `.github/instructions`) and registers the Ace Code Search MCP server for Codex (`~/.codex/config.toml`) and Cursor (`~/.cursor/mcp.json`); activation no longer silently writes personal copies.
+- Add one canonical project Agent Skill under `.agents/skills`, with thin Cursor Rule and Claude compatibility wrappers; VS Code Copilot project instructions are now an explicit optional install instead of part of the default layout.
+- Add a stable user-level MCP launcher for Codex/Cursor that discovers the newest installed extension, plus dynamic VS Code MCP provider registration; no project `.codex` config or version-pinned MCP path is required.
+- Add fail-closed migration for managed legacy Skill/rule/config copies, preserving user-modified, unmanaged, or malformed files and configs with warnings; activation never installs silently.
 - Add project maintainer rule `.cursor/rules/mcp-feature-parity.mdc` so searchable feature work keeps MCP tools, Skill templates, and guidance docs in sync.
 
 ### Fixed
+- Preserve the working Primary when replacement validation or registry persistence fails, atomically publish complete writer-lock owner records, keep concurrent registry Primary selections and first-open physical paths unique with durable last-saver semantics, hold the registry lease through destructive path validation/commit, prevent one physical DB from being opened/deleted as conflicting Primary/Secondary entries, stop disposed indexing work, isolate bindings during workspace changes, and reject unsafe moves of live WAL databases.
 - Detect when PATH `code` is Cursor's shim on macOS and install into the real Visual Studio Code.app CLI / `~/.vscode/extensions` instead.
-- Fix Ace Code Search MCP startup from packaged VSIX: ship Node ABI binaries under `native-node/` and always resolve them for non-Electron MCP/CLI (VSIX omits `better-sqlite3/build`).
+- Fix MCP defaults, multi-index quotas, mapped-path lookups, partial-build reporting, and discovery resilience; default registry access is constrained to MCP workspace roots unless explicitly authorized.
+- Fix packaged MCP/CLI native loading by shipping distinct Electron and Node 20/22/24 ABI matrices, validating all 24 release binaries plus runtime entries, and loading the correct binding for each host.
 - Prevent `Maximum call stack size exceeded` in large class hierarchies by removing unbounded array-spread calls and using iterative filter/render graph traversal.
 - Move editor file watching out of the extension-host chokidar crawl, coalesce queued changes during searches, and prevent large Unreal Engine workspaces from starving search/UI work.
 - Persist search profiles from search start through success, cancellation, errors, or disposal, including incremental checkpoints and ACK wait timings.
 - Stop re-registering command IDs owned by C/C++ and clangd extensions.
 
 ### Changed
+- Store new workspace indexes in the shared OS application-data directory while retaining legacy per-editor `globalStorage` databases, registry fields, and downgrade-compatible Secondary IDs; `code-search.autocreate` remains authoritative.
+- Raise the minimum supported VS Code version to 1.103, the first stable release on Electron 37 / ABI 136 covered by the packaged native matrix. Codex/Cursor launcher configs require PATH Node.js 20, 22, or 24; VS Code uses its editor runtime.
 - Show loaded versus discovered hit counts while streaming and keep search profiling disabled by default.
+
+## [0.8.0] - 2026-07-20
+
+### Changed
+- add secondary index support
 
 ## [0.7.0] - 2026-07-19
 

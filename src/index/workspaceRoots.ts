@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { canonicalPathKey } from './sharedIndexStorage';
 
 function isStrictSubpath(parent: string, child: string): boolean {
   const resolvedParent = path.resolve(parent);
@@ -16,4 +17,16 @@ export function pruneNestedRoots(roots: string[]): string[] {
   return resolved.filter(
     (root) => !resolved.some((other) => other !== root && isStrictSubpath(root, other))
   );
+}
+
+export function sameWorkspaceRoots(
+  left: readonly string[],
+  right: readonly string[]
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const leftKeys = left.map((root) => canonicalPathKey(root)).sort();
+  const rightKeys = right.map((root) => canonicalPathKey(root)).sort();
+  return leftKeys.every((key, index) => key === rightKeys[index]);
 }

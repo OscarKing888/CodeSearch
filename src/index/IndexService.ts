@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS meta (
 ${TOKEN_AUTOCOMPLETE_INDEX_SQL}
 `;
 const BATCH_SIZE = 100;
+export const INDEX_BUILD_STATE_META_KEY = 'indexBuildStateV1';
+export type IndexBuildState = 'building' | 'complete' | 'failed' | 'unknown';
 
 export class IndexService extends EventEmitter {
   private db: SqliteDatabase | undefined;
@@ -68,6 +70,8 @@ export class IndexService extends EventEmitter {
   private paused = false;
   private pauseCount = 0;
   private indexing = false;
+  private indexingGeneration = 0;
+  private disposed = false;
   private status: IndexStatus = 'idle';
   private queued = 0;
   private indexed = 0;
@@ -127,23 +131,61 @@ export class IndexService extends EventEmitter {
 
   /** True when low-priority hierarchy cache work may touch this database. */
   isBackgroundWorkAllowed(): boolean {
-    return !this.indexing &&
+    return !this.disposed &&
+      !this.indexing &&
       this.pauseCount === 0 &&
       this.status !== 'scanning' &&
       this.status !== 'indexing';
   }
 
   async initialize(rootDirs: string[]): Promise<void> {
+    this.disposed = false;
+    const initializeGeneration = this.indexingGeneration;
     this.rootDirs = rootDirs;
-    const dir = path.dirname(this.dbPath);
-    await fs.promises.mkdir(dir, { recursive: true });
-
-    this.db = openDatabase(this.dbPath, { readonly: this.readOnly });
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
-    this.db.exec(SCHEMA);
-    this.ensureTokenAutocompleteIndex();
+    if (this.readOnly) {
+      // A shared/secondary reader must never create or migrate the database.
+      // In particular, setting journal_mode and executing CREATE statements can
+      // fail on a database owned by another IDE (or silently violate read-only
+      // expectations on permissive filesystems).
+      this.db = openDatabase(this.dbPath, { readonly: true, fileMustExist: true });
+      this.db.pragma('query_only = ON');
+      this.validateReadableSchema();
+    } else {
+      const dir = path.dirname(this.dbPath);
+      await fs.promises.mkdir(dir, { recursive: true });
+      if (this.disposed || initializeGeneration !== this.indexingGeneration) {
+        throw new Error('Index service was disposed during initialization');
+      }
+      this.db = openDatabase(this.dbPath);
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('synchronous = NORMAL');
+      this.db.exec(SCHEMA);
+      this.ensureTokenAutocompleteIndex();
+    }
     this.prepareStatements();
+  }
+
+  private validateReadableSchema(): void {
+    if (!this.db) {
+      return;
+    }
+    const required = ['files', 'files_fts', 'tokens'];
+    const rows = this.db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE (type = 'table' OR type = 'view')
+           AND name IN (${required.map(() => '?').join(', ')})`
+      )
+      .all(...required) as Array<{ name: string }>;
+    const found = new Set(rows.map((row) => row.name));
+    const missing = required.filter((name) => !found.has(name));
+    if (missing.length > 0) {
+      this.db.close();
+      this.db = undefined;
+      throw new Error(
+        `Not a compatible Ace Code Search database (missing: ${missing.join(', ')})`
+      );
+    }
   }
 
   private ensureTokenAutocompleteIndex(): void {
@@ -164,24 +206,26 @@ export class IndexService extends EventEmitter {
     if (!this.db) {
       return;
     }
-    this.insertFileStmt = this.db.prepare(`
-      INSERT INTO files (path, mtime, size, ext, dir, content)
-      VALUES (@path, @mtime, @size, @ext, @dir, @content)
-    `);
-    this.updateFileStmt = this.db.prepare(`
-      UPDATE files SET mtime=@mtime, size=@size, ext=@ext, dir=@dir, content=@content
-      WHERE path=@path
-    `);
-    this.deleteFileStmt = this.db.prepare(`DELETE FROM files WHERE path = ?`);
-    this.deleteFtsStmt = this.db.prepare(`DELETE FROM files_fts WHERE path = ?`);
-    this.insertFtsStmt = this.db.prepare(`
-      INSERT INTO files_fts (path, content) VALUES (@path, @content)
-    `);
+    if (!this.readOnly) {
+      this.insertFileStmt = this.db.prepare(`
+        INSERT INTO files (path, mtime, size, ext, dir, content)
+        VALUES (@path, @mtime, @size, @ext, @dir, @content)
+      `);
+      this.updateFileStmt = this.db.prepare(`
+        UPDATE files SET mtime=@mtime, size=@size, ext=@ext, dir=@dir, content=@content
+        WHERE path=@path
+      `);
+      this.deleteFileStmt = this.db.prepare(`DELETE FROM files WHERE path = ?`);
+      this.deleteFtsStmt = this.db.prepare(`DELETE FROM files_fts WHERE path = ?`);
+      this.insertFtsStmt = this.db.prepare(`
+        INSERT INTO files_fts (path, content) VALUES (@path, @content)
+      `);
+      this.upsertTokenStmt = this.db.prepare(`
+        INSERT INTO tokens (token, freq) VALUES (?, 1)
+        ON CONFLICT(token) DO UPDATE SET freq = freq + 1
+      `);
+    }
     this.getFileMtimeStmt = this.db.prepare(`SELECT mtime FROM files WHERE path = ?`);
-    this.upsertTokenStmt = this.db.prepare(`
-      INSERT INTO tokens (token, freq) VALUES (?, 1)
-      ON CONFLICT(token) DO UPDATE SET freq = freq + 1
-    `);
     this.tokenSuggestionsStmt = this.db.prepare(`
       SELECT token, freq FROM tokens
       WHERE token LIKE ? COLLATE NOCASE
@@ -195,11 +239,71 @@ export class IndexService extends EventEmitter {
   }
 
   isPartialIndex(): boolean {
-    return this.status !== 'upToDate';
+    return this.getIndexBuildState() !== 'complete';
+  }
+
+  /** Read every time so read-only clients observe a concurrent writer dynamically. */
+  getIndexBuildState(): IndexBuildState {
+    if (!this.db) {
+      return 'unknown';
+    }
+    try {
+      const row = this.db
+        .prepare('SELECT value FROM meta WHERE key = ?')
+        .get(INDEX_BUILD_STATE_META_KEY) as { value: string } | undefined;
+      if (row?.value === 'building' || row?.value === 'complete' || row?.value === 'failed') {
+        return row.value;
+      }
+    } catch {
+      // Legacy readable indexes may not have a meta table. Unknown is safely
+      // treated as partial instead of claiming that the snapshot is complete.
+    }
+    return 'unknown';
+  }
+
+  private writeIndexBuildState(state: Exclude<IndexBuildState, 'unknown'>): void {
+    if (!this.db || this.readOnly || this.disposed) {
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      )
+      .run(INDEX_BUILD_STATE_META_KEY, state);
+  }
+
+  private tryWriteIndexBuildState(state: Exclude<IndexBuildState, 'unknown'>): void {
+    try {
+      this.writeIndexBuildState(state);
+    } catch {
+      // Preserve the original indexing error. An old/missing marker remains
+      // partial, which is the safe state for readers.
+    }
   }
 
   getProgress(): IndexProgress {
-    let message = 'Up to date';
+    if (this.readOnly) {
+      const buildState = this.getIndexBuildState();
+      const status: IndexStatus = buildState === 'complete' ? 'upToDate' : 'idle';
+      const message =
+        buildState === 'complete'
+          ? `${formatTokenCount(this.getTokenCount())} · Up to date`
+          : buildState === 'building'
+            ? 'Index snapshot is still building'
+            : buildState === 'failed'
+              ? 'Index build failed; snapshot may be incomplete'
+              : 'Index completion is unknown (legacy snapshot)';
+      return {
+        status,
+        queued: this.queued,
+        indexed: this.indexed,
+        total: this.total,
+        scanned: this.scanned,
+        message,
+      };
+    }
+    let message = this.status === 'idle' ? 'Ready' : 'Up to date';
     if (this.status === 'scanning') {
       message = `Scanning ${this.scanned} files...`;
     } else if (this.status === 'indexing') {
@@ -242,111 +346,146 @@ export class IndexService extends EventEmitter {
   }
 
   async startIndexing(forceAll = false): Promise<void> {
-    if (this.readOnly || this.indexing || !this.db) {
-      if (this.readOnly) {
-        this.setStatus('upToDate');
+    if (this.disposed || this.readOnly || this.indexing || !this.db) {
+      if (this.readOnly && !this.disposed) {
+        this.setStatus(this.getIndexBuildState() === 'complete' ? 'upToDate' : 'idle');
         this.emit('progress', this.getProgress());
       }
       return;
     }
-    this.indexing = true;
-    this.setStatus('scanning');
-    this.indexed = 0;
-    this.queued = 0;
-    this.scanned = 0;
-    this.emit('progress', this.getProgress());
-
-    const config = this.getEffectiveSettings();
-    if (forceAll) {
-      await this.purgeStaleEntries(config);
-    }
-    const filesSet = new Set<string>();
-
-    for (const root of this.rootDirs) {
-      for await (const filePath of walkDirectory(root, config)) {
-        if (this.paused) {
-          await this.sleep(100);
+    const generation = ++this.indexingGeneration;
+    const cancelled = () => this.disposed || generation !== this.indexingGeneration;
+    let failed = false;
+    let completed = false;
+    try {
+      this.writeIndexBuildState('building');
+      this.indexing = true;
+      this.setStatus('scanning');
+      this.indexed = 0;
+      this.queued = 0;
+      this.scanned = 0;
+      this.emit('progress', this.getProgress());
+      const config = this.getEffectiveSettings();
+      if (forceAll) {
+        await this.purgeStaleEntries(config, cancelled);
+        if (cancelled()) {
+          return;
         }
-        this.scanned++;
-        if (this.scanned % 50 === 0) {
-          this.emit('progress', this.getProgress());
-        }
-        if (!forceAll) {
-          const existing = this.getFileMtimeStmt?.get(filePath) as { mtime: number } | undefined;
-          if (existing) {
-            try {
-              const stat = await fs.promises.stat(filePath);
-              if (Math.floor(stat.mtimeMs) === existing.mtime) {
+      }
+      const filesSet = new Set<string>();
+
+      for (const root of this.rootDirs) {
+        for await (const filePath of walkDirectory(root, config)) {
+          if (cancelled()) {
+            return;
+          }
+          if (this.paused) {
+            await this.sleep(100);
+          }
+          this.scanned++;
+          if (this.scanned % 50 === 0) {
+            this.emit('progress', this.getProgress());
+          }
+          if (!forceAll) {
+            const existing = this.getFileMtimeStmt?.get(filePath) as
+              | { mtime: number }
+              | undefined;
+            if (existing) {
+              try {
+                const stat = await fs.promises.stat(filePath);
+                if (Math.floor(stat.mtimeMs) === existing.mtime) {
+                  continue;
+                }
+              } catch {
                 continue;
               }
-            } catch {
-              continue;
             }
           }
+          filesSet.add(filePath);
         }
-        filesSet.add(filePath);
-      }
-    }
-
-    const filesToIndex = Array.from(filesSet);
-
-    this.emit('progress', this.getProgress());
-    this.total = filesToIndex.length;
-    this.queued = filesToIndex.length;
-    this.setStatus('indexing');
-
-    const threadCount = resolveIndexThreadCount(config.indexThreads);
-    this.activeThreadCount = threadCount;
-
-    for (let i = 0; i < filesToIndex.length; i += BATCH_SIZE) {
-      while (this.paused) {
-        await this.sleep(200);
       }
 
-      const batch = filesToIndex.slice(i, i + BATCH_SIZE);
-      const results = await mapWithConcurrency(batch, threadCount, readFileForIndex, {
-        shouldPause: () => this.paused,
-        onPause: () => this.sleep(200),
-      });
-      const records = results.filter((r): r is FileRecord => r !== null);
+      const filesToIndex = Array.from(filesSet);
 
-      this.indexBatch(records);
-      this.indexed += batch.length;
-      this.queued = filesToIndex.length - this.indexed;
       this.emit('progress', this.getProgress());
-    }
+      this.total = filesToIndex.length;
+      this.queued = filesToIndex.length;
+      this.setStatus('indexing');
 
-    this.activeThreadCount = 1;
+      const threadCount = resolveIndexThreadCount(config.indexThreads);
+      this.activeThreadCount = threadCount;
 
-    try {
+      for (let i = 0; i < filesToIndex.length; i += BATCH_SIZE) {
+        while (this.paused && !cancelled()) {
+          await this.sleep(200);
+        }
+        if (cancelled()) {
+          return;
+        }
+
+        const batch = filesToIndex.slice(i, i + BATCH_SIZE);
+        const results = await mapWithConcurrency(batch, threadCount, readFileForIndex, {
+          shouldPause: () => this.paused && !cancelled(),
+          onPause: () => this.sleep(200),
+        });
+        if (cancelled()) {
+          return;
+        }
+        const records = results.filter((r): r is FileRecord => r !== null);
+
+        this.indexBatch(records, generation);
+        this.indexed += batch.length;
+        this.queued = filesToIndex.length - this.indexed;
+        this.emit('progress', this.getProgress());
+      }
+
+      if (cancelled()) {
+        return;
+      }
       // Do not advertise an idle index until the watcher is registered. On
       // VS Code/Cursor this uses the editor file service instead of walking
       // the workspace again in the extension host.
-      this.startWatcher(config);
+      this.startWatcher(config, generation);
+      this.writeIndexBuildState('complete');
+      completed = true;
     } catch (error) {
-      this.indexing = false;
+      failed = true;
       throw error;
+    } finally {
+      // A stale indexing attempt must never reset a newer generation. For the
+      // current generation, always release the in-flight guard so Refresh can
+      // retry after any scanner, database, or watcher failure.
+      if (generation === this.indexingGeneration) {
+        this.indexing = false;
+        this.activeThreadCount = 1;
+        if (failed && !this.disposed) {
+          this.tryWriteIndexBuildState('failed');
+          this.setStatus('idle');
+          this.emit('progress', this.getProgress());
+        } else if (completed && !this.disposed) {
+          this.setStatus('upToDate');
+          this.emit('progress', this.getProgress());
+        }
+      }
     }
-    this.setStatus('upToDate');
-    this.indexing = false;
-    this.emit('progress', this.getProgress());
   }
 
-  private indexBatch(records: FileRecord[]): void {
-    if (!this.db) {
+  private indexBatch(records: FileRecord[], generation: number): void {
+    if (!this.isWriteGenerationActive(generation) || !this.db) {
       return;
     }
 
-    const tx = this.db.transaction((items: FileRecord[]) => {
+    const db = this.db;
+    const tx = db.transaction((items: FileRecord[]) => {
       for (const record of items) {
-        this.indexFile(record);
+        this.indexFile(record, generation);
       }
     });
     tx(records);
   }
 
-  indexFile(record: FileRecord): void {
-    if (this.readOnly) {
+  indexFile(record: FileRecord, generation = this.indexingGeneration): void {
+    if (!this.isWriteGenerationActive(generation)) {
       return;
     }
     if (!this.db || !this.insertFileStmt || !this.updateFileStmt) {
@@ -370,73 +509,114 @@ export class IndexService extends EventEmitter {
 
   async indexSingleFile(
     filePath: string,
-    config: IndexingSettings = this.getEffectiveSettings()
+    config: IndexingSettings = this.getEffectiveSettings(),
+    generation = this.indexingGeneration
   ): Promise<void> {
-    if (this.readOnly) {
+    if (!this.isWriteGenerationActive(generation)) {
       return;
     }
     try {
       const stat = await fs.promises.stat(filePath);
+      if (!this.isWriteGenerationActive(generation)) {
+        return;
+      }
       if (!shouldIndexFile(filePath, config, stat.size)) {
-        this.removeFile(filePath);
+        this.removeFile(filePath, generation);
         return;
       }
     } catch {
-      this.removeFile(filePath);
+      if (this.isWriteGenerationActive(generation)) {
+        this.removeFile(filePath, generation);
+      }
       return;
     }
 
     const record = await readFileForIndex(filePath);
-    if (record) {
-      this.indexFile(record);
-    } else {
-      this.removeFile(filePath);
+    if (!this.isWriteGenerationActive(generation)) {
+      return;
     }
-    this.emit('progress', this.getProgress());
+    if (record) {
+      this.indexFile(record, generation);
+    } else {
+      this.removeFile(filePath, generation);
+    }
+    if (this.isWriteGenerationActive(generation)) {
+      this.emit('progress', this.getProgress());
+    }
   }
 
-  removeFile(filePath: string): void {
+  removeFile(filePath: string, generation = this.indexingGeneration): void {
+    if (!this.isWriteGenerationActive(generation) || !this.db) {
+      return;
+    }
     this.deleteFtsStmt?.run(filePath);
     this.deleteFileStmt?.run(filePath);
   }
 
-  private async purgeStaleEntries(config: IndexingSettings): Promise<void> {
+  private isWriteGenerationActive(generation: number): boolean {
+    return (
+      !this.disposed &&
+      !this.readOnly &&
+      !!this.db &&
+      generation === this.indexingGeneration
+    );
+  }
+
+  private async purgeStaleEntries(
+    config: IndexingSettings,
+    cancelled: () => boolean = () => this.disposed
+  ): Promise<void> {
     if (!this.db || this.readOnly) {
       return;
     }
     const rows = this.db.prepare('SELECT path FROM files').all() as { path: string }[];
     for (const { path: filePath } of rows) {
+      if (cancelled()) {
+        return;
+      }
       const remain = await shouldPathRemainInIndex(filePath, this.rootDirs, config);
+      if (cancelled()) {
+        return;
+      }
       if (!remain) {
         this.removeFile(filePath);
       }
     }
   }
 
-  private startWatcher(config: IndexingSettings = this.getEffectiveSettings()): void {
-    if (this.readOnly) {
+  private startWatcher(
+    config: IndexingSettings = this.getEffectiveSettings(),
+    generation = this.indexingGeneration
+  ): void {
+    if (!this.isWriteGenerationActive(generation)) {
       return;
     }
     this.watcher.start(this.rootDirs, config, (filePath, event) => {
-      return this.handleFileChange(filePath, event, config);
+      return this.handleFileChange(filePath, event, config, generation);
     });
   }
 
   private async handleFileChange(
     filePath: string,
     event: 'add' | 'change' | 'unlink',
-    config: IndexingSettings
+    config: IndexingSettings,
+    generation: number
   ): Promise<void> {
-    if (event === 'unlink') {
-      this.removeFile(filePath);
-      this.emit('progress', this.getProgress());
+    if (!this.isWriteGenerationActive(generation)) {
       return;
     }
-    await this.indexSingleFile(filePath, config);
+    if (event === 'unlink') {
+      this.removeFile(filePath, generation);
+      if (this.isWriteGenerationActive(generation)) {
+        this.emit('progress', this.getProgress());
+      }
+      return;
+    }
+    await this.indexSingleFile(filePath, config, generation);
   }
 
   async refresh(forceAll = false): Promise<void> {
-    if (this.readOnly) {
+    if (this.readOnly || this.disposed) {
       return;
     }
     this.watcher.stop();
@@ -502,10 +682,29 @@ export class IndexService extends EventEmitter {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.indexingGeneration++;
+    this.indexing = false;
+    const db = this.db;
+    this.db = undefined;
+    this.insertFileStmt = undefined;
+    this.updateFileStmt = undefined;
+    this.deleteFileStmt = undefined;
+    this.deleteFtsStmt = undefined;
+    this.insertFtsStmt = undefined;
+    this.getFileMtimeStmt = undefined;
+    this.upsertTokenStmt = undefined;
+    this.tokenSuggestionsStmt = undefined;
     this.watcher.stop();
-    if (this.db) {
-      this.db.close();
-      this.db = undefined;
+    if (db) {
+      try {
+        db.close();
+      } catch {
+        // A streaming statement iterator can keep better-sqlite3 busy across
+        // an async yield. Runtime references were already detached above, so
+        // no indexing callback can write after the manager releases its lease;
+        // the iterator's owner will release the remaining read handle.
+      }
     }
   }
 }

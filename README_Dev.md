@@ -39,64 +39,53 @@ Read-only stdio MCP server over existing Ace Code Search SQLite indexes:
 npm run build
 npm run rebuild:node
 npm run mcp -- --db /path/to/index.db
-# or: npm run mcp -- --registry /path/to/registry.json
-# or: npm run mcp   # auto-discovers VS Code/Cursor globalStorage registries
+# strict registry plus an explicit client workspace scope
+npm run mcp -- --registry /path/to/registry.json --workspace-root /path/to/workspace
+# tolerant auto-discovery of VS Code/Cursor globalStorage registries
+npm run mcp
+# opt in only when cross-workspace access is intentional
+npm run mcp -- --all-indexes
 ```
-
-Cursor / Claude Desktop example (`mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "ace-code-search": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/extension-or-repo/dist/mcp.js"
-      ]
-    }
-  }
-}
-```
-
-Codex (VS Code extension / CLI / desktop) example (`~/.codex/config.toml`):
-
-```toml
-[mcp_servers.ace-code-search]
-command = "node"
-args = ["/absolute/path/to/extension-or-repo/dist/mcp.js"]
-startup_timeout_sec = 30
-tool_timeout_sec = 120
-enabled = true
-```
-
-The toolbar **Install project Agent Skill / Rule / MCP** command writes both of the above (managed blocks) plus project Skill/Rule files. **Skill install alone is not enough** for Codex: without this MCP entry, the session only has local tools such as `exec_command` and must fall back to `rg`.
 
 Tools: `list_indexes`, `search_code`, `read_indexed_file`, `find_header_source`.
-Results come from the **index snapshot** (not a live filesystem walk). MCP uses the **system Node** `better-sqlite3` build (`npm run rebuild:node`); after `rebuild-electron` / packaging, `build.sh` restores it automatically.
+Results come from the **index snapshot**, not a live filesystem walk. Automatic discovery tolerates broken registries/databases and reports them through `list_indexes.warnings`; explicit `--db` and `--registry` sources remain strict. A missing legacy build-state marker is `unknown`, and every state other than `complete` returns `partialIndex: true`.
 
-#### Project Agent Skill / Rule installation
+Default discovery is scoped to MCP client workspace roots, then explicit repeated `--workspace-root` arguments, then cwd. Every mapped index output root must be contained by a client root, so a parent index or mixed unrelated roots fail closed. Direct `--db` explicitly authorizes that database; `--all-indexes` explicitly opts into cross-workspace registry access. When multiple indexes remain visible, tools require `indexId`.
 
-The search toolbar **Install project Agent Skill / Rule / MCP** button (command **Ace Code Search: Install Project Agent Skill, Rule, and MCP Config**) writes into each open workspace folder so Codex and Cursor discover guidance from **repo-scoped** paths (higher priority than personal skills):
+Codex/Cursor launchers and direct CLI/MCP runs use the system-Node binaries under `native-node/`. The VS Code MCP definition provider launches `process.execPath` with `ELECTRON_RUN_AS_NODE=1`, so a local Electron extension host selects the matching `native/` ABI; remote system-Node extension hosts select `native-node/`. Both paths resolve the installed extension root before loading `better-sqlite3`.
 
-- Codex / shared Skill: `{workspace}/.agents/skills/ace-code-search-mcp`
-- Cursor Skill: `{workspace}/.cursor/skills/ace-code-search-mcp`
-- Cursor Rule: `{workspace}/.cursor/rules/ace-code-search-first.mdc`
-- VS Code Copilot Instruction: `{workspace}/.github/instructions/ace-code-search.instructions.md`
-- Codex MCP client config: `~/.codex/config.toml` and `{workspace}/.codex/config.toml`
-- Cursor MCP client config: `~/.cursor/mcp.json`
+Workspace Primary/Secondary selection, `workspaceIndexBindingV2`, shared-index creation, and `<index.db>.writer.lock` are intentionally excluded from MCP: they mutate editor state or writer ownership. MCP still discovers per-editor registries (including shared/manual DB paths after an IDE registers them), supports explicit `--db`, opens databases read-only, and never acquires the writer lease.
 
-Activation does **not** auto-install (avoids dirtying git). Managed marker files prevent overwriting user-owned Skill/Rule copies; MCP TOML uses `# BEGIN/END ACE-CODE-SEARCH-MCP` markers. Conflicts are logged to the **Ace Code Search** output channel.
+#### Agent integration installation
 
-The packaged Skill source is `resources/skills/ace-code-search-mcp/SKILL.md` (must stay byte-identical to `.cursor/skills/ace-code-search-mcp/SKILL.md` and preferably `.agents/skills/...`). Packaged Cursor Rule is `resources/rules/ace-code-search-first.mdc` (must match `.cursor/rules/ace-code-search-first.mdc`).
+The search toolbar document-check button (command **Ace Code Search: Install Agent Integration (Project Guidance + User MCP)**) installs:
+
+- Canonical full Skill: `{workspace}/.agents/skills/ace-code-search-mcp/SKILL.md`
+- Thin Cursor routing Rule: `{workspace}/.cursor/rules/ace-code-search-first.mdc`
+- Thin Claude compatibility wrapper: `{workspace}/.claude/skills/ace-code-search-mcp/SKILL.md`
+- Stable user launcher: `~/.ace-code-search/mcp-launcher.cjs`
+- User MCP configs: `~/.codex/config.toml` and `~/.cursor/mcp.json`
+- A dynamic VS Code MCP provider (`ace-code-search.mcp-servers`) when that API is available
+
+The launcher discovers the newest installed Ace Code Search extension each time it starts, so client config does not retain a versioned extension path. Skill files alone do not expose MCP tools; after installation, restart Codex or run `/mcp`.
+
+Codex/Cursor launcher configs invoke `node` from the client PATH; the published VSIX guarantees native bindings for Node.js 20, 22, and 24. VS Code's dynamic provider uses the editor runtime, so it does not depend on a separate PATH Node.
+
+The full Skill exists only in `.agents`; do not recreate a `.cursor/skills` mirror. Normal installation does not create project `.codex/config.toml` or `.github/instructions`, and activation does not write anything. **Ace Code Search: Install Optional VS Code Copilot Search Instruction** is the explicit opt-in for the project `.github/instructions` wrapper. The personal Cursor User Rule copy helper remains optional.
+
+Managed files use owner/kind/content-hash markers and atomic replacement. TOML blocks and recognized legacy Cursor JSON entries migrate only when their exact managed shape is known. Invalid markers, malformed configs, custom entries, and user-modified files are preserved with warnings. A legacy project `.codex` block, `.cursor/skills` mirror, or default `.github/instructions` file is removed only when its managed content can be verified.
+
+The packaged Skill source `resources/skills/ace-code-search-mcp/SKILL.md` must stay byte-identical to `.agents/skills/ace-code-search-mcp/SKILL.md`. Packaged Cursor Rule `resources/rules/ace-code-search-first.mdc` must stay byte-identical to `.cursor/rules/ace-code-search-first.mdc`; it is a thin route to the canonical Skill.
 
 #### Prefer-indexed-search guidance
 
-- Project Cursor Rule / VS Code Instruction: installed by the toolbar command above.
+- Project Cursor Rule and Claude wrapper: installed by the toolbar command above.
+- Project VS Code Copilot Instruction: installed only by its explicit optional command.
 - Optional Cursor personal User Rule text: `resources/rules/cursor-user-rule.txt` via **Copy Cursor User Rule (Personal)**.
 
 The guidance prefers indexed MCP tools for code discovery, but requires `rg`/filesystem/direct-read fallback when no matching index exists, `partialIndex` affects completeness, content may be stale, or files are excluded/unindexed. It never treats indexed snapshots as unsaved content.
 
-`vscode:prepublish` only runs the normal `npm run build` (esbuild). Cross-platform Electron native binaries are produced by `scripts/rebuild-electron.js` and the Release GitHub Actions workflow — not by `vscode:prepublish`.
+`vscode:prepublish` only runs the normal `npm run build` (esbuild). Cross-platform Electron and Node native binaries are produced by the rebuild scripts and Release GitHub Actions workflow, not by `vscode:prepublish`. `npm run test:native` builds the runtime entries and runs the native matrix/VSIX/CLI smoke tests.
 
 ## Release
 
@@ -223,12 +212,58 @@ See VS Code Settings → **Ace Code Search** for exclude globs, context lines, p
 ## Phase 3 — Multi-Index & Tabs
 
 - **Multi-tab results**: `Ctrl+Enter` new tab, lock tabs with 🔒, close with ×
-- **Secondary indexes**: `Ace Code Search: Open Secondary Index` — search third-party libs
-- **Index management**: toolbar ⚙ or `Ace Code Search: Manage Indexes` — opens a dedicated **Manage Indexes** editor tab (WebviewPanel) with index cards, filter, inline rename, directory mappings, attach/detach, delete, and refresh. Create / attach / move still use native VS Code file dialogs.
+- **Shared Primary**: new non-autocreate workspaces use one deterministic DB path shared by VS Code and Cursor; `Ace Code Search: Choose Workspace Primary Index...` also supports an auto-discovered candidate or manually selected `index.db`
+- **Secondary indexes**: `Ace Code Search: Open Secondary Index` opens a discovered or manually selected DB read-only by default; writable mode requires known source roots and the writer lease
+- **Index management**: toolbar ⚙ or `Ace Code Search: Manage Indexes` opens a dedicated editor tab with a compact workspace context, a dominant Primary, subordinate Secondary rows, a lower-priority Available list, and one selected-index inspector. The inspector separates **Index content** (read-only roots, inherited/global rules, Additional exclusions) from **This workspace** (role, access/writer state, directory mappings). Native dialogs own DB/root selection; the UI must not render fake root editing or access-mode controls that the backend cannot commit.
 - **Autocreate**: add `code-search.autocreate` in workspace root (optional JSON config)
 - **Directory mapping**: map `\\server\share => C:\local` for shared indexes
 - **CLI**: `npm run cli -- create|update|list` (see [PHASE2.md](PHASE2.md))
 - **MCP**: `npm run mcp` — read-only stdio tools for AI agents (see Development → MCP above)
+
+### Cross-IDE Primary binding and compatibility
+
+Startup precedence is: `code-search.autocreate` → a valid `workspaceIndexBindingV2.<workspace-hash>` Primary → matching legacy/current registry entry → the pre-shared default `{globalStorage}/code-search/<workspace-hash>/index.db` → deterministic shared path → create/choose prompt. Probing the old deterministic path preserves existing indexes even if an older `registry.json` was lost or reset. A missing, corrupt, or incompatible saved/legacy database is logged and skipped so the next distinct candidate can still open; the same failed physical path is not retried through duplicate registry metadata. If no replacement is selected, the unresolved saved Primary binding is preserved for a later retry instead of being erased. `code-search.autocreate` remains authoritative and intentionally fails startup when its configured index cannot open.
+
+Bindings are separated by workspace hash inside editor `workspaceState` and store paths rather than registry IDs, because VS Code and Cursor maintain separate registries. The old `secondaryIndexIds` value is still written for downgrade compatibility, but it is imported only once into V2 state; afterward a keyed binding (including an empty Secondary list) is authoritative so changing workspace roots cannot inherit another root set's Secondary indexes. A keyed Secondary that is temporarily missing, invalid, or unavailable remains in the binding across routine saves and shutdown, so a later startup can retry it; only an explicit **Close** or **Forget** removes that path. Writable Secondary restore opens, registers, and persists the service first, then scans in the background, so a large Secondary cannot block the management/search UI during extension activation. Interactive **Open Secondary** uses the same non-blocking behavior; explicit standalone index creation retains its progress-wait flow.
+
+Default shared paths:
+
+| Platform | Path |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\AceCodeSearch\indexes\<workspace-key>\index.db` |
+| macOS | `~/Library/Application Support/AceCodeSearch/indexes/<workspace-key>/index.db` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/AceCodeSearch/indexes/<workspace-key>/index.db` |
+
+`workspace-key` is a SHA-256 prefix over the sorted canonical workspace roots, so root ordering and Windows path casing do not split VS Code and Cursor onto different shared databases. The existing 32-bit workspace hash remains the editor initialization identity and continues to name legacy/autocreate paths, registry associations, and workspace binding entries.
+
+Existing `globalStorage/.../code-search/<hash>/index.db` files remain in place and reopen as `legacy`; no automatic copy or deletion occurs. Candidate discovery reads both VS Code and Cursor registries, accepts exact normalized root matches or a legacy workspace-hash match, deduplicates by physical DB path, and ignores a temporarily unreadable peer registry.
+
+Requested access modes are `readOnly` and `auto`. `auto` writes and fsyncs the owner JSON to a same-directory temporary file, then atomically publishes `<index.db>.writer.lock` with a no-replace hard link; the winner opens writable, while a contender waits briefly for first-use schema creation, then opens the same SQLite DB read-only and reports the writer label. Filesystems without hard-link support fall back to exclusive create, but a malformed/incomplete main lock is then deliberately never auto-reclaimed: close every IDE using that index before manually removing it. Read-only services use `fileMustExist` and SQLite `query_only`, validate the required schema, and never create/migrate tables, scan roots, or start a watcher. Writer locks are released only by their token owner, and a valid dead main-lock owner is reclaimed behind a second atomic-create guard. An existing `<index.db>.writer.lock.reclaim` is likewise intentionally fail-safe and is never auto-deleted because filesystem check-then-unlink cannot atomically prove that another process did not replace it; if a process dies during that very small recovery window, close every IDE using the index before manually deleting the orphan guard. When the writer exits normally, or leaves only the valid main lock, an idle automatic reader periodically acquires ownership, reopens writable, and starts indexing/watching without a reload.
+
+Primary replacement is validated before the old Primary closes. Promoting an attached Secondary removes the duplicate service, and the active Primary path cannot also be attached as a Secondary. A writable DB with unknown roots requires explicit source-root selection. Live DB moves are rejected; only inactive catalog entries are eligible in the manager. Physical delete holds the registry writer lease from the final merged-reference check through unlink. Move validates its merged destination and commits or rolls its catalog path back while holding that same lease; after a successful `COPYFILE_EXCL`, an ambiguous failed commit leaves the destination copy for manual recovery instead of deleting a path a peer may have claimed.
+
+Command-palette Primary/Secondary/create flows capture the current manager plus workspace identity before opening native pickers. If workspace folders change while a picker or database open is pending, the old result may still be reported but cannot update the new workspace binding, Primary source, or search service.
+
+### Cross-IDE verification
+
+```bash
+npx ts-node test/sharedIndexStorage.test.ts
+npx ts-node test/workspaceIndexBinding.test.ts
+npx ts-node test/workspaceOperationGuard.test.ts
+npx ts-node test/indexWriterLease.test.ts
+npx ts-node test/indexDiscovery.test.ts
+npx ts-node test/indexRegistry.test.ts
+npx ts-node test/indexPresence.test.ts
+npx ts-node test/startupPrimarySelection.test.ts
+npx ts-node test/indexManager.test.ts
+npx ts-node test/indexServiceDispose.test.ts
+npx ts-node test/indexServiceRecovery.test.ts
+npm test
+npx tsc --noEmit
+npm run build
+```
+
+Manual smoke test: open the same workspace in VS Code and Cursor, select the shared Primary in both, and confirm one shows writable while the other names that writer and remains read-only. Then verify manual Primary selection survives reload, Secondary attachments restore, missing/non-Ace DBs fail without replacing the working Primary, and an autocreate workspace disables panel Primary changes.
 
 ## Roadmap
 
@@ -282,13 +317,13 @@ flowchart TB
 
 - **语言**: TypeScript + VS Code Extension API
 - **索引引擎**: `better-sqlite3` + SQLite FTS5（持久化，BM25 排序，适合百万级命中）
-- **文件监视**: `chokidar`（跨平台）
+- **文件监视**: VS Code/Cursor 原生 `FileSystemWatcher`；CLI/non-editor 使用 `chokidar` fallback
 - **模糊搜索**: 编辑距离 + FTS5 后处理（`FuzzyMatch.ts`）
 - **UI**: WebviewView + Vanilla TS 前端
 - **语法高亮**: `vscode-textmate` + 当前主题 token 颜色
 - **构建**: `esbuild` 打包 extension + webview
 
-**索引存储位置**: `context.globalStorageUri/code-search/<workspace-hash>/index.db`（可通过 `code-search.autocreate` 自定义 `indexLocation`）
+**索引存储位置**: 新工作区默认使用上文的 IDE-independent `AceCodeSearch/indexes/<workspace-key>/index.db`；`context.globalStorageUri/code-search/` 保留 registry 与 legacy DB 兼容。`code-search.autocreate` 可继续用 `indexLocation` 指定路径。
 
 ### 项目结构
 
@@ -309,8 +344,12 @@ flowchart TB
 │   ├── index/
 │   │   ├── IndexService.ts   # 建索引、增量更新、状态管理
 │   │   ├── IndexManager.ts   # 多索引注册与管理
+│   │   ├── IndexWriterLease.ts # 单写者锁、死进程回收
+│   │   ├── sharedIndexStorage.ts # 跨 IDE 共享路径与 canonical path
+│   │   ├── workspaceIndexBinding.ts # workspace Primary/Secondary 路径绑定
+│   │   ├── indexDiscovery.ts # 合并 VS Code/Cursor registry 候选
 │   │   ├── FileScanner.ts    # 遍历、过滤二进制/排除规则
-│   │   ├── FileWatcher.ts    # chokidar 监听
+│   │   ├── FileWatcher.ts    # 编辑器原生监听 + chokidar fallback
 │   │   ├── Autocreate.ts     # code-search.autocreate 解析
 │   │   └── schema.sql        # FTS5 表结构
 │   ├── native/
@@ -407,11 +446,15 @@ CREATE TABLE tokens (
 | `codeSearch.prevHit` | `Ctrl+Alt+[` | 上一命中（面板内聚焦时） |
 | `codeSearch.switchHeaderSource` | `Alt+O` | 在索引中查找并切换头/源文件（C/C++ 扩展名） |
 | `codeSearch.refreshIndex` | — | 强制重建索引 |
+| `codeSearch.manageIndexes` | — | 打开 Workspace Primary / Secondary 管理页 |
+| `codeSearch.selectPrimaryIndex` | — | 选择共享、自动发现或手动 `index.db` 作为 Primary |
+| `codeSearch.openSecondaryIndex` | — | 打开只读或自动单写者 Secondary |
+| `codeSearch.createIndex` | — | 创建并打开一个可写 Secondary |
 | `codeSearch.openClassHierarchy` | — | 直接打开全部已索引 C++ class 的继承树 panel |
 
 ### 配置项
 
-- `codeSearch.excludeGlobs` — 额外排除模式（默认含 `node_modules`, `dist`, `bin`, `obj`）
+- `codeSearch.excludeGlobs` — 全局排除模式；除常见 `node_modules`, `dist`, `bin`, `obj` 外，默认还覆盖 Unreal 的 `Binaries`, `DerivedDataCache`, `Intermediate`, `Saved` 等生成目录
 - `codeSearch.includeGlobs` — 包含模式（默认 `**/*`）
 - `codeSearch.contextLines` — 开启 Ctx 后每条命中上下各显示的行数（默认 1，范围 0–10）
 - `codeSearch.phraseSearchDefault` — 默认短语模式
@@ -425,13 +468,15 @@ CREATE TABLE tokens (
 
 **2. 索引性能**: 批量事务（每 100 文件 commit 一次）；`IndexService` 在搜索/用户输入时暂停扫描（`pauseIndexing()`）。
 
-**3. Class 继承缓存**: `ClassHierarchyCacheManager` 仅在索引和搜索空闲时读取待更新源码，最多两个 Worker 只负责解析，完成后由扩展线程集中、分批提交 `class_hierarchy_*` 缓存表，并在批次间重新检查搜索/索引状态。只读或无缓存的旧 secondary index 不执行 schema 写入，打开继承树时改用一次内存解析。
+**3. 跨 IDE 索引所有权**: `IndexManager` 保存 requested/effective access；`IndexWriterLease` 决定唯一 writer，竞争方创建 read-only `IndexService`，并在原 writer 退出后于空闲时自动接管。Primary 切换先打开并持久化新服务再关闭旧服务；异步 dispose 会等待 lease 释放，`IndexService` generation 会终止旧扫描，防止切换后继续写库。物理删除在管理 lease 下拒绝重复 catalog 路径，并在 registry writer lease 内完成最终引用检查、提交与清理；兼容性的 DB move 是“不覆盖的 copy/repoint”（保留源文件），同时持有源/目标 lease，在同一 registry lease 内提交或回滚路径，拒绝 live WAL 与任何已有目标。
 
-**3. 语法高亮**: Webview 通过 `postMessage` 获取当前 `colorTheme`，用 `vscode-textmate` 对结果行 tokenize，映射到 CSS class。
+**4. Class 继承缓存**: `ClassHierarchyCacheManager` 仅在索引和搜索空闲时读取待更新源码，最多两个 Worker 只负责解析，完成后由扩展线程集中、分批提交 `class_hierarchy_*` 缓存表，并在批次间重新检查搜索/索引状态。只读或无缓存的旧 secondary index 不执行 schema 写入，打开继承树时改用一次内存解析。
 
-**4. native 模块**: `better-sqlite3` 需针对 VS Code/Cursor 内置 Electron ABI 预编译，产物放在 `native/<platform>-<arch>-<abi>/`。本地用 `scripts/rebuild-electron.js`；发布用 GitHub Actions 跨平台构建并合并。`vscode:prepublish` **只**跑普通 esbuild，不负责 native。CLI/MCP 另需 `scripts/rebuild-node.js` 把模块恢复为系统 Node ABI。
+**5. 语法高亮**: Webview 通过 `postMessage` 获取当前 `colorTheme`，用 `vscode-textmate` 对结果行 tokenize，映射到 CSS class。
 
-**5. 与 VS Code 内置搜索的关系**: 本插件是**补充**而非替代——提供预索引全文搜索体验；不修改内置 Search 面板。
+**6. native 模块**: `better-sqlite3` 需分别针对 VS Code/Cursor 内置 Electron ABI 与系统 Node ABI 预编译。Electron 产物放在 `native/<platform>-<arch>-<abi>/`；Node 20/22/24 发布矩阵放在 `native-node/<platform>-<arch>-<abi>/`，本地 `scripts/rebuild-node.js` 仍支持当前任意 Node 20+ ABI。发布工作流按平台/ABI 分开构建、合并并验证 24 个必需条目。`vscode:prepublish` **只**跑普通 esbuild，不负责 native；使用 `npm run test:native` 做本机 native/VSIX/CLI 回归。
+
+**7. 与 VS Code 内置搜索的关系**: 本插件是**补充**而非替代——提供预索引全文搜索体验；不修改内置 Search 面板。
 
 ## 索引与搜索算法
 
@@ -447,7 +492,7 @@ flowchart LR
     DB --> Meta[files 元数据表]
     DB --> FTS[files_fts FTS5 倒排索引]
     DB --> Tokens[tokens 词频表]
-    Watcher[chokidar 文件监视] --> Incremental[增量更新单文件]
+    Watcher[Editor FileSystemWatcher / CLI chokidar] --> Incremental[增量更新单文件]
     Incremental --> DB
     Query[用户查询] --> Parser[QueryParser]
     Parser --> FTS

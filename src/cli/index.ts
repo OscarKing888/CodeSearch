@@ -10,6 +10,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { IndexService } from '../index/IndexService';
 import { IndexRegistry } from '../index/IndexRegistry';
+import { configureBetterSqlite3 } from '../native/betterSqlite3';
+import { resolveExtensionRoot } from '../native/extensionRoot';
 
 interface CliArgs {
   command: string;
@@ -18,6 +20,7 @@ interface CliArgs {
   name?: string;
   force?: boolean;
   registry?: string;
+  extensionRoot?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -45,6 +48,10 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--registry':
         result.registry = next;
+        i++;
+        break;
+      case '--extension-root':
+        result.extensionRoot = next;
         i++;
         break;
     }
@@ -113,11 +120,21 @@ Commands:
   create   --root <dir> --db <file.db> [--name <name>]
   update   --db <file.db> [--root <dir>] [--force]
   list     [--registry <registry.json>]
+
+Options:
+  --extension-root <dir>   Extension/repo root for system Node native binaries
 `);
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv);
+  if (args.command === 'create' || args.command === 'update') {
+    const extensionRoot = args.extensionRoot
+      ? path.resolve(args.extensionRoot)
+      : resolveExtensionRoot(__dirname);
+    configureBetterSqlite3(extensionRoot);
+  }
+
   switch (args.command) {
     case 'create':
       await cmdCreate(args);

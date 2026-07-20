@@ -7,4 +7,6 @@ export function manageIndexes(): void {
 export {
   createStandaloneIndex,
   browseAndAttachIndex as openSecondaryIndex,
+  selectPrimaryIndex,
+  saveWorkspaceIndexBinding,
 } from './IndexManagementService';

@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -7,13 +8,16 @@ import {
   installPersonalAgentSkill,
   installProjectAgentSkill,
 } from '../src/agentSkillInstaller';
+import { installProjectAgentRules } from '../src/agentRuleInstaller';
 
 const ROOT = path.join(__dirname, '..');
 
-async function testInstallAndUpdate(): Promise<void> {
-  const homeDir = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), 'code-search-skill-')
-  );
+function sha256(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+async function testPersonalCanonicalAndClaudeWrapper(): Promise<void> {
+  const homeDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'code-search-skill-'));
   try {
     const first = await installPersonalAgentSkill({
       extensionRoot: ROOT,
@@ -21,42 +25,33 @@ async function testInstallAndUpdate(): Promise<void> {
       homeDir,
     });
     assert.strictEqual(first.changed, true);
-    assert.strictEqual(first.warnings.length, 0);
-    assert.strictEqual(first.paths.length, 3);
+    assert.deepStrictEqual(first.warnings, []);
+    assert.deepStrictEqual(first.paths.map((item) => item.client), ['canonical', 'claude']);
 
-    const canonical = path.join(
-      homeDir,
-      '.agents',
-      'skills',
-      AGENT_SKILL_NAME
-    );
-    const cursor = path.join(
-      homeDir,
-      '.cursor',
-      'skills',
-      AGENT_SKILL_NAME
-    );
-    const vscode = path.join(
-      homeDir,
-      '.copilot',
-      'skills',
-      AGENT_SKILL_NAME
-    );
+    const canonical = path.join(homeDir, '.agents', 'skills', AGENT_SKILL_NAME);
     const canonicalContent = await fs.promises.readFile(
       path.join(canonical, 'SKILL.md'),
       'utf8'
     );
     assert.ok(canonicalContent.includes('name: ace-code-search-mcp'));
-
-    for (const alias of [cursor, vscode]) {
-      const aliasContent = await fs.promises.readFile(
-        path.join(alias, 'SKILL.md'),
-        'utf8'
-      );
-      assert.strictEqual(aliasContent, canonicalContent);
-      const stat = await fs.promises.lstat(alias);
-      assert.ok(stat.isSymbolicLink() || stat.isDirectory());
-    }
+    const wrapperPath = path.join(
+      homeDir,
+      '.claude',
+      'skills',
+      AGENT_SKILL_NAME,
+      'SKILL.md'
+    );
+    const wrapper = await fs.promises.readFile(wrapperPath, 'utf8');
+    assert.ok(wrapper.includes('../../../.agents/skills/ace-code-search-mcp/SKILL.md'));
+    assert.ok(!wrapper.includes('## `search_code` matching parameters'));
+    assert.strictEqual(
+      fs.existsSync(path.join(homeDir, '.cursor', 'skills', AGENT_SKILL_NAME)),
+      false
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(homeDir, '.copilot', 'skills', AGENT_SKILL_NAME)),
+      false
+    );
 
     const second = await installPersonalAgentSkill({
       extensionRoot: ROOT,
@@ -71,7 +66,20 @@ async function testInstallAndUpdate(): Promise<void> {
       homeDir,
     });
     assert.strictEqual(upgraded.changed, true);
-    assert.strictEqual(upgraded.warnings.length, 0);
+    assert.deepStrictEqual(upgraded.warnings, []);
+
+    await fs.promises.appendFile(path.join(canonical, 'SKILL.md'), '\nuser edit\n');
+    const preserved = await installPersonalAgentSkill({
+      extensionRoot: ROOT,
+      version: '1.2.0',
+      homeDir,
+    });
+    assert.ok(preserved.warnings.some((warning) => warning.includes('user-modified')));
+    assert.ok(
+      (await fs.promises.readFile(path.join(canonical, 'SKILL.md'), 'utf8')).includes(
+        'user edit'
+      )
+    );
   } finally {
     await fs.promises.rm(homeDir, { recursive: true, force: true });
   }
@@ -81,20 +89,10 @@ async function testUnmanagedCanonicalIsPreserved(): Promise<void> {
   const homeDir = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'code-search-skill-conflict-')
   );
-  const canonical = path.join(
-    homeDir,
-    '.agents',
-    'skills',
-    AGENT_SKILL_NAME
-  );
+  const canonical = path.join(homeDir, '.agents', 'skills', AGENT_SKILL_NAME);
   try {
     await fs.promises.mkdir(canonical, { recursive: true });
-    await fs.promises.writeFile(
-      path.join(canonical, 'SKILL.md'),
-      'user-owned\n',
-      'utf8'
-    );
-
+    await fs.promises.writeFile(path.join(canonical, 'SKILL.md'), 'user-owned\n', 'utf8');
     const result = await installPersonalAgentSkill({
       extensionRoot: ROOT,
       version: '1.0.0',
@@ -106,73 +104,148 @@ async function testUnmanagedCanonicalIsPreserved(): Promise<void> {
       await fs.promises.readFile(path.join(canonical, 'SKILL.md'), 'utf8'),
       'user-owned\n'
     );
-    assert.strictEqual(
-      fs.existsSync(
-        path.join(homeDir, '.cursor', 'skills', AGENT_SKILL_NAME)
-      ),
-      false
-    );
+    assert.strictEqual(fs.existsSync(path.join(homeDir, '.claude', 'skills')), false);
   } finally {
     await fs.promises.rm(homeDir, { recursive: true, force: true });
   }
 }
 
-async function testUnmanagedAliasIsPreserved(): Promise<void> {
+async function testPersonalLegacyCursorIsRetained(): Promise<void> {
   const homeDir = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), 'code-search-skill-alias-')
+    path.join(os.tmpdir(), 'code-search-skill-legacy-')
   );
-  const cursor = path.join(
-    homeDir,
-    '.cursor',
-    'skills',
-    AGENT_SKILL_NAME
-  );
+  const legacyDir = path.join(homeDir, '.cursor', 'skills', AGENT_SKILL_NAME);
   try {
-    await fs.promises.mkdir(cursor, { recursive: true });
-    await fs.promises.writeFile(
-      path.join(cursor, 'SKILL.md'),
-      'cursor-user-owned\n',
-      'utf8'
-    );
-
-    const result = await installPersonalAgentSkill({
+    await fs.promises.mkdir(legacyDir, { recursive: true });
+    await fs.promises.writeFile(path.join(legacyDir, 'SKILL.md'), 'user-owned\n');
+    const preserved = await installPersonalAgentSkill({
       extensionRoot: ROOT,
       version: '1.0.0',
       homeDir,
     });
-    assert.strictEqual(result.changed, true);
-    assert.ok(result.warnings.some((warning) => warning.includes('cursor')));
+    assert.deepStrictEqual(preserved.warnings, []);
     assert.strictEqual(
-      await fs.promises.readFile(path.join(cursor, 'SKILL.md'), 'utf8'),
-      'cursor-user-owned\n'
+      await fs.promises.readFile(path.join(legacyDir, 'SKILL.md'), 'utf8'),
+      'user-owned\n'
     );
-    assert.strictEqual(
-      fs.existsSync(
-        path.join(homeDir, '.copilot', 'skills', AGENT_SKILL_NAME, 'SKILL.md')
-      ),
-      true
+
+    await fs.promises.rm(legacyDir, { recursive: true, force: true });
+    const source = await fs.promises.readFile(
+      path.join(ROOT, 'resources', 'skills', AGENT_SKILL_NAME, 'SKILL.md'),
+      'utf8'
     );
+    await fs.promises.mkdir(legacyDir, { recursive: true });
+    await fs.promises.writeFile(path.join(legacyDir, 'SKILL.md'), source);
+    await fs.promises.writeFile(
+      path.join(legacyDir, '.ace-code-search-wrapper.json'),
+      `${JSON.stringify({
+        owner: 'OscarKing888.ace-code-search',
+        kind: 'wrapper-copy',
+        version: '0.7.0',
+        sourceHash: sha256(source),
+      })}\n`
+    );
+    const retained = await installPersonalAgentSkill({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      homeDir,
+    });
+    assert.ok(!retained.paths.some((item) => item.client === 'legacy-cursor'));
+    assert.strictEqual(fs.existsSync(legacyDir), true);
   } finally {
     await fs.promises.rm(homeDir, { recursive: true, force: true });
   }
 }
 
-async function testPackagedTemplateMatchesProjectSkill(): Promise<void> {
-  const project = await fs.promises.readFile(
-    path.join(ROOT, '.cursor', 'skills', AGENT_SKILL_NAME, 'SKILL.md'),
+async function writeLegacyProjectCursorSkill(workspaceRoot: string): Promise<string> {
+  const source = await fs.promises.readFile(
+    path.join(ROOT, 'resources', 'skills', AGENT_SKILL_NAME, 'SKILL.md'),
+    'utf8'
+  );
+  const legacyDir = path.join(workspaceRoot, '.cursor', 'skills', AGENT_SKILL_NAME);
+  await fs.promises.mkdir(legacyDir, { recursive: true });
+  await fs.promises.writeFile(path.join(legacyDir, 'SKILL.md'), source);
+  await fs.promises.writeFile(
+    path.join(legacyDir, '.ace-code-search-managed.json'),
+    JSON.stringify({
+      owner: 'OscarKing888.ace-code-search',
+      kind: 'canonical',
+      version: '0.7.0',
+      sourceHash: sha256(source),
+    }) + '\n'
+  );
+  return legacyDir;
+}
+
+async function testProjectLegacyCleanupRequiresCursorRule(): Promise<void> {
+  const successfulRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'code-search-project-skill-migrate-')
+  );
+  const conflictRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'code-search-project-skill-conflict-')
+  );
+  try {
+    const successfulLegacy = await writeLegacyProjectCursorSkill(successfulRoot);
+    const installedRules = await installProjectAgentRules({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      workspaceRoot: successfulRoot,
+    });
+    assert.strictEqual(installedRules.paths[0].mode, 'installed');
+    await installProjectAgentSkill({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      workspaceRoot: successfulRoot,
+      cleanupLegacyCursorSkill: true,
+    });
+    assert.strictEqual(fs.existsSync(successfulLegacy), false);
+
+    const conflictingLegacy = await writeLegacyProjectCursorSkill(conflictRoot);
+    const customRule = path.join(
+      conflictRoot,
+      '.cursor',
+      'rules',
+      'ace-code-search-first.mdc'
+    );
+    await fs.promises.mkdir(path.dirname(customRule), { recursive: true });
+    await fs.promises.writeFile(customRule, 'user-owned Cursor rule\n');
+    const conflictingRules = await installProjectAgentRules({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      workspaceRoot: conflictRoot,
+    });
+    const cursorRule = conflictingRules.paths[0];
+    const cleanupAllowed =
+      cursorRule.mode === 'installed' && cursorRule.warning === undefined;
+    assert.strictEqual(cursorRule.mode, 'existing');
+    assert.ok(cursorRule.warning);
+    await installProjectAgentSkill({
+      extensionRoot: ROOT,
+      version: '1.0.0',
+      workspaceRoot: conflictRoot,
+      cleanupLegacyCursorSkill: cleanupAllowed,
+    });
+    assert.strictEqual(fs.existsSync(conflictingLegacy), true);
+  } finally {
+    await fs.promises.rm(successfulRoot, { recursive: true, force: true });
+    await fs.promises.rm(conflictRoot, { recursive: true, force: true });
+  }
+}
+
+async function testPackagedTemplateMatchesCanonicalProjectSkill(): Promise<void> {
+  const canonical = await fs.promises.readFile(
+    path.join(ROOT, '.agents', 'skills', AGENT_SKILL_NAME, 'SKILL.md'),
     'utf8'
   );
   const packaged = await fs.promises.readFile(
-    path.join(
-      ROOT,
-      'resources',
-      'skills',
-      AGENT_SKILL_NAME,
-      'SKILL.md'
-    ),
+    path.join(ROOT, 'resources', 'skills', AGENT_SKILL_NAME, 'SKILL.md'),
     'utf8'
   );
-  assert.strictEqual(packaged, project);
+  assert.strictEqual(packaged, canonical);
+  assert.strictEqual(
+    fs.existsSync(path.join(ROOT, '.cursor', 'skills', AGENT_SKILL_NAME, 'SKILL.md')),
+    false
+  );
 }
 
 async function testProjectInstall(): Promise<void> {
@@ -186,8 +259,8 @@ async function testProjectInstall(): Promise<void> {
       workspaceRoot,
     });
     assert.strictEqual(first.changed, true);
-    assert.strictEqual(first.warnings.length, 0);
-    assert.strictEqual(first.paths.length, 2);
+    assert.deepStrictEqual(first.warnings, []);
+    assert.deepStrictEqual(first.paths.map((item) => item.client), ['agents', 'project-claude']);
 
     const agents = path.join(
       workspaceRoot,
@@ -196,16 +269,19 @@ async function testProjectInstall(): Promise<void> {
       AGENT_SKILL_NAME,
       'SKILL.md'
     );
-    const cursor = path.join(
+    const claude = path.join(
       workspaceRoot,
-      '.cursor',
+      '.claude',
       'skills',
       AGENT_SKILL_NAME,
       'SKILL.md'
     );
-    const content = await fs.promises.readFile(agents, 'utf8');
-    assert.ok(content.includes('name: ace-code-search-mcp'));
-    assert.strictEqual(await fs.promises.readFile(cursor, 'utf8'), content);
+    assert.ok((await fs.promises.readFile(agents, 'utf8')).includes('name: ace-code-search-mcp'));
+    assert.ok((await fs.promises.readFile(claude, 'utf8')).includes('../../../.agents/skills'));
+    assert.strictEqual(
+      fs.existsSync(path.join(workspaceRoot, '.cursor', 'skills', AGENT_SKILL_NAME)),
+      false
+    );
 
     const second = await installProjectAgentSkill({
       extensionRoot: ROOT,
@@ -213,34 +289,17 @@ async function testProjectInstall(): Promise<void> {
       workspaceRoot,
     });
     assert.strictEqual(second.changed, false);
-
-    await fs.promises.writeFile(agents, 'user-owned\n', 'utf8');
-    await fs.promises.rm(
-      path.join(
-        workspaceRoot,
-        '.agents',
-        'skills',
-        AGENT_SKILL_NAME,
-        '.ace-code-search-managed.json'
-      )
-    );
-    const conflict = await installProjectAgentSkill({
-      extensionRoot: ROOT,
-      version: '1.0.1',
-      workspaceRoot,
-    });
-    assert.ok(conflict.warnings.some((w) => w.includes('unmanaged')));
-    assert.strictEqual(await fs.promises.readFile(agents, 'utf8'), 'user-owned\n');
   } finally {
     await fs.promises.rm(workspaceRoot, { recursive: true, force: true });
   }
 }
 
 async function main(): Promise<void> {
-  await testInstallAndUpdate();
+  await testPersonalCanonicalAndClaudeWrapper();
   await testUnmanagedCanonicalIsPreserved();
-  await testUnmanagedAliasIsPreserved();
-  await testPackagedTemplateMatchesProjectSkill();
+  await testPersonalLegacyCursorIsRetained();
+  await testProjectLegacyCleanupRequiresCursorRule();
+  await testPackagedTemplateMatchesCanonicalProjectSkill();
   await testProjectInstall();
   console.log('agentSkillInstaller tests passed');
 }

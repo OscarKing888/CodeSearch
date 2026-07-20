@@ -10,11 +10,42 @@ import {
   getEffectiveRoots,
   resolveIndexDbPath,
 } from './index/Autocreate';
-import { hasWorkspaceIndex } from './index/indexPresence';
+import { findExistingWorkspaceIndexes } from './index/indexPresence';
+import {
+  selectFirstUsableStartupPrimary,
+  StartupPrimaryCandidate,
+} from './index/startupPrimarySelection';
+import {
+  captureWorkspaceOperation,
+  isWorkspaceOperationCurrent,
+  WorkspaceOperationToken,
+} from './index/workspaceOperationGuard';
 import { MultiIndexSearchService } from './search/MultiIndexSearchService';
 import { SearchPanelProvider } from './ui/SearchPanelProvider';
-import { createStandaloneIndex, manageIndexes, openSecondaryIndex } from './ui/IndexManagement';
+import {
+  createStandaloneIndex,
+  manageIndexes,
+  openSecondaryIndex,
+  saveWorkspaceIndexBinding,
+  selectPrimaryIndex,
+} from './ui/IndexManagement';
 import { IndexManagePanel } from './ui/IndexManagePanel';
+import {
+  IndexManagementWorkspaceContext,
+  IndexOperationResult,
+} from './ui/IndexManagementService';
+import {
+  getSharedWorkspaceDbPath,
+  getSharedWorkspaceKey,
+  samePath as samePhysicalIndex,
+} from './index/sharedIndexStorage';
+import {
+  getWorkspaceIndexBindingKey,
+  getWorkspaceSecondaryRestoreSource,
+  LEGACY_SECONDARY_IDS_MIGRATION_MARKER_KEY,
+  migrateLegacyWorkspaceBinding,
+  normalizeWorkspaceIndexBinding,
+} from './index/workspaceIndexBinding';
 import { getLogicalCpuCount } from './index/threadCount';
 import { switchHeaderSource as runSwitchHeaderSource } from './pairing/switchHeaderSource';
 import { migrateUserHeaderSourceKeybindings } from './pairing/migrateHeaderSourceKeybindings';
@@ -22,11 +53,17 @@ import { revealProfileLogFolder } from './utils/searchProfileUi';
 import { installProjectAgentSkill } from './agentSkillInstaller';
 import {
   installProjectAgentRules,
+  installProjectVscodeInstruction,
   readCursorUserRule,
 } from './agentRuleInstaller';
 import { installMcpClientConfig } from './mcpConfigInstaller';
+import {
+  buildVscodeMcpLaunchSpec,
+  VSCODE_MCP_SERVER_DEFINITION_PROVIDER_ID,
+} from './vscodeMcpProvider';
 
-const CREATE_INDEX_LABEL = 'Create Index';
+const CREATE_INDEX_LABEL = 'Create Shared Index';
+const CHOOSE_INDEX_LABEL = 'Choose Existing...';
 const SKIP_INDEX_LABEL = 'Not Now';
 
 const INDEXING_CONFIG_KEYS = [
@@ -45,11 +82,14 @@ let panelProvider: SearchPanelProvider | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 let initPromise: Promise<void> | undefined;
+let initializationTail: Promise<void> = Promise.resolve();
+let initializationGeneration = 0;
 let initializedWorkspaceHash: string | undefined;
 let webviewRegistered = false;
 let progressListener: (() => void) | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let indexingSettingsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+let indexManagementWorkspace: IndexManagementWorkspaceContext | undefined;
 
 function resolveEditorProduct(): 'Cursor' | 'Code' {
   const appName = vscode.env.appName.toLowerCase();
@@ -64,6 +104,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   extensionContext = context;
   logCpuInfo(context);
   registerCommands(context);
+  registerVscodeMcpProvider(context);
   // Project Skill/Rule install is explicit (toolbar / command) so we do not
   // silently dirty workspace git status on every activation.
   void migrateUserHeaderSourceKeybindings(resolveEditorProduct(), (message) =>
@@ -152,26 +193,44 @@ function registerCommands(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('codeSearch.installAgentSkill', () => {
       void installAgentSkill(context, true);
     }),
+    vscode.commands.registerCommand('codeSearch.installVscodeCopilotInstruction', () => {
+      void installVscodeCopilotInstruction(context);
+    }),
     vscode.commands.registerCommand('codeSearch.copyCursorUserRule', () => {
       void copyCursorUserRule(context);
     }),
     vscode.commands.registerCommand('codeSearch.openSecondaryIndex', async () => {
-      if (!(await ensureWorkspaceReady()) || !indexManager) {
+      if (!(await ensureWorkspaceReady()) || !indexManager || !indexManagementWorkspace) {
         return;
       }
-      const err = await openSecondaryIndex(indexManager);
-      if (!err) {
-        await saveSecondaryIds(context);
+      const operation = captureWorkspaceOperation(indexManager, indexManagementWorkspace);
+      await handleCommandOperation(
+        await openSecondaryIndex(operation.manager, operation.workspace),
+        context,
+        operation
+      );
+    }),
+    vscode.commands.registerCommand('codeSearch.selectPrimaryIndex', async () => {
+      if (!(await ensureWorkspaceReady()) || !indexManager || !indexManagementWorkspace) {
+        return;
       }
+      const operation = captureWorkspaceOperation(indexManager, indexManagementWorkspace);
+      await handleCommandOperation(
+        await selectPrimaryIndex(operation.manager, operation.workspace),
+        context,
+        operation
+      );
     }),
     vscode.commands.registerCommand('codeSearch.createIndex', async () => {
-      if (!(await ensureWorkspaceReady()) || !indexManager) {
+      if (!(await ensureWorkspaceReady()) || !indexManager || !indexManagementWorkspace) {
         return;
       }
-      const err = await createStandaloneIndex(indexManager);
-      if (!err) {
-        await saveSecondaryIds(context);
-      }
+      const operation = captureWorkspaceOperation(indexManager, indexManagementWorkspace);
+      await handleCommandOperation(
+        await createStandaloneIndex(operation.manager),
+        context,
+        operation
+      );
     }),
     vscode.commands.registerCommand('codeSearch.searchInNewTab', () => {
       panelProvider?.searchInNewTab();
@@ -205,7 +264,7 @@ async function installAgentSkill(
     // User-level Codex config applies to the VS Code Codex extension.
     const mcp = await installMcpClientConfig({
       extensionRoot: context.extensionPath,
-      workspaceRoot: folders[0]?.uri.fsPath,
+      workspaceRoots: folders.map((folder) => folder.uri.fsPath),
     });
     for (const item of mcp.paths) {
       outputChannel?.appendLine(
@@ -217,15 +276,22 @@ async function installAgentSkill(
 
     for (const folder of folders) {
       const workspaceRoot = folder.uri.fsPath;
-      const skill = await installProjectAgentSkill({
-        extensionRoot: context.extensionPath,
-        version,
-        workspaceRoot,
-      });
       const rules = await installProjectAgentRules({
         extensionRoot: context.extensionPath,
         version,
         workspaceRoot,
+      });
+      const cursorRule = rules.paths.find(
+        (item) =>
+          item.path ===
+          path.join(workspaceRoot, '.cursor', 'rules', 'ace-code-search-first.mdc')
+      );
+      const skill = await installProjectAgentSkill({
+        extensionRoot: context.extensionPath,
+        version,
+        workspaceRoot,
+        cleanupLegacyCursorSkill:
+          cursorRule?.mode === 'installed' && cursorRule.warning === undefined,
       });
 
       for (const item of skill.paths) {
@@ -268,8 +334,9 @@ async function installAgentSkill(
         ? installedRoots[0]
         : `${installedRoots.length} workspace folders`;
     void vscode.window.showInformationMessage(
-      `Ace Code Search: Project Skill/Rule + MCP config installed under ${rootLabel}. ` +
-        'Restart Codex (or run /mcp) so list_indexes / search_code appear.'
+      `Ace Code Search: Canonical .agents Skill, IDE wrappers, and user MCP config installed for ${rootLabel}. ` +
+        'Restart Codex (or run /mcp) so list_indexes / search_code appear. ' +
+        'Codex/Cursor require Node.js 20, 22, or 24 on PATH; VS Code uses its editor runtime.'
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -279,6 +346,108 @@ async function installAgentSkill(
         `Ace Code Search: Failed to install project Agent guidance — ${message}`
       );
     }
+  }
+}
+
+function registerVscodeMcpProvider(context: vscode.ExtensionContext): void {
+  if (resolveEditorProduct() !== 'Code') {
+    return;
+  }
+  const runtime = vscode as typeof vscode & {
+    McpStdioServerDefinition?: typeof vscode.McpStdioServerDefinition;
+    lm?: typeof vscode.lm;
+  };
+  const register = runtime.lm?.registerMcpServerDefinitionProvider;
+  const StdioDefinition = runtime.McpStdioServerDefinition;
+  if (typeof register !== 'function' || typeof StdioDefinition !== 'function') {
+    outputChannel?.appendLine(
+      'VS Code MCP provider API is unavailable in this editor version; Codex/Cursor user config remains available.'
+    );
+    return;
+  }
+
+  const changed = new vscode.EventEmitter<void>();
+  const provider: vscode.McpServerDefinitionProvider<vscode.McpStdioServerDefinition> = {
+    onDidChangeMcpServerDefinitions: changed.event,
+    provideMcpServerDefinitions: () => {
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      const launch = buildVscodeMcpLaunchSpec({
+        extensionRoot: context.extensionPath,
+        executablePath: process.execPath,
+        version: String(context.extension.packageJSON.version ?? '0.0.0'),
+        workspaceRoots: folders.map((folder) => folder.uri.fsPath),
+      });
+      if (!launch) {
+        return [];
+      }
+      const definition = new StdioDefinition(
+        launch.label,
+        launch.command,
+        launch.args,
+        launch.env,
+        launch.version
+      );
+      definition.cwd =
+        folders.find((folder) => folder.uri.fsPath === launch.cwd)?.uri ??
+        vscode.Uri.file(launch.cwd);
+      return [definition];
+    },
+  };
+
+  context.subscriptions.push(
+    changed,
+    runtime.lm!.registerMcpServerDefinitionProvider(
+      VSCODE_MCP_SERVER_DEFINITION_PROVIDER_ID,
+      provider
+    ),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => changed.fire())
+  );
+}
+
+async function installVscodeCopilotInstruction(
+  context: vscode.ExtensionContext
+): Promise<void> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    void vscode.window.showWarningMessage(
+      'Ace Code Search: Open a folder or workspace before installing the optional Copilot instruction.'
+    );
+    return;
+  }
+
+  const version = String(context.extension.packageJSON.version ?? '0.0.0');
+  const warnings: string[] = [];
+  let changed = 0;
+  try {
+    for (const folder of folders) {
+      const result = await installProjectVscodeInstruction({
+        extensionRoot: context.extensionPath,
+        version,
+        workspaceRoot: folder.uri.fsPath,
+      });
+      if (result.changed) changed++;
+      if (result.warning) warnings.push(result.warning);
+      outputChannel?.appendLine(
+        `Optional VS Code Copilot instruction [${folder.name}]: ${result.path}` +
+          (result.changed ? ' (updated)' : '')
+      );
+    }
+    if (warnings.length > 0) {
+      for (const warning of warnings) outputChannel?.appendLine(`Agent guidance warning: ${warning}`);
+      void vscode.window.showWarningMessage(
+        `Ace Code Search: Copilot instruction install completed with warnings — ${warnings.join(' ')}`
+      );
+      return;
+    }
+    void vscode.window.showInformationMessage(
+      `Ace Code Search: Optional Copilot instruction ${changed > 0 ? 'installed' : 'already current'} for ${folders.length} workspace folder(s).`
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    outputChannel?.appendLine(`Copilot instruction install failed: ${message}`);
+    void vscode.window.showErrorMessage(
+      `Ace Code Search: Failed to install optional Copilot instruction — ${message}`
+    );
   }
 }
 
@@ -300,35 +469,71 @@ async function copyCursorUserRule(
   }
 }
 
-async function initializeWorkspace(context: vscode.ExtensionContext): Promise<void> {
+function initializeWorkspace(context: vscode.ExtensionContext): Promise<void> {
+  const generation = ++initializationGeneration;
+  const task = initializationTail
+    .catch(() => undefined)
+    .then(() => initializeWorkspaceNow(context, generation));
+  initializationTail = task;
+  initPromise = task;
+  void task
+    .finally(() => {
+      if (initPromise === task) {
+        initPromise = undefined;
+      }
+    })
+    .catch(() => undefined);
+  return task;
+}
+
+async function initializeWorkspaceNow(
+  context: vscode.ExtensionContext,
+  generation: number
+): Promise<void> {
+  if (generation !== initializationGeneration) {
+    return;
+  }
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
+    await saveSecondaryIds(context);
     await panelProvider?.disposeActiveSearches();
-    disposeWorkspaceResources();
+    await disposeWorkspaceResources();
     initializedWorkspaceHash = undefined;
-    initPromise = undefined;
     return;
   }
 
   const hash = workspaceHash(folders);
-  if (initializedWorkspaceHash && initializedWorkspaceHash !== hash) {
+  if (initializedWorkspaceHash === hash && indexManager) {
+    return;
+  }
+  if (indexManager) {
     await saveSecondaryIds(context);
     await panelProvider?.disposeActiveSearches();
-    disposeWorkspaceResources();
-    initPromise = undefined;
+    await disposeWorkspaceResources();
   }
 
-  if (initPromise) {
-    return initPromise;
+  if (generation !== initializationGeneration) {
+    return;
   }
 
-  initPromise = doInitializeWorkspace(context, folders);
   try {
-    await initPromise;
+    await doInitializeWorkspace(context, folders);
+    const currentFolders = vscode.workspace.workspaceFolders;
+    const currentHash = currentFolders?.length ? workspaceHash(currentFolders) : undefined;
+    if (generation !== initializationGeneration || currentHash !== hash) {
+      await saveSecondaryIds(context);
+      await panelProvider?.disposeActiveSearches();
+      await disposeWorkspaceResources();
+      initializedWorkspaceHash = undefined;
+      return;
+    }
     initializedWorkspaceHash = hash;
   } catch (err) {
-    initPromise = undefined;
     initializedWorkspaceHash = undefined;
+    await disposeWorkspaceResources();
+    if (generation !== initializationGeneration) {
+      return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     vscode.window.showErrorMessage(`Ace Code Search: Failed to initialize — ${message}`);
     throw err;
@@ -343,50 +548,232 @@ async function doInitializeWorkspace(
   const globalStorage = context.globalStorageUri.fsPath;
   await fsMkdir(globalStorage);
 
-  indexManager = new IndexManager(globalStorage, hash);
-  await indexManager.initialize();
-
   const autocreate = await findAutocreateConfig(folders);
   if (autocreate) {
     applyAutocreateToConfig(autocreate.config);
   }
 
   const roots = getEffectiveRoots(folders, autocreate?.rootDir);
-  const dbPath = autocreate
+  const sharedDbPath = getSharedWorkspaceDbPath(getSharedWorkspaceKey(roots));
+  const legacyDefaultDbPath = path.join(
+    globalStorage,
+    'code-search',
+    hash,
+    'index.db'
+  );
+  const legacyOrAutocreateDbPath = autocreate
     ? resolveIndexDbPath(autocreate.config, autocreate.rootDir, globalStorage, hash)
-    : path.join(globalStorage, 'code-search', hash, 'index.db');
+    : legacyDefaultDbPath;
+
+  indexManager = new IndexManager(globalStorage, hash, {
+    writerLabel: resolveEditorProduct(),
+    sharedDbPath,
+    workspaceRoots: roots,
+  });
+  await indexManager.initialize();
 
   const indexName = autocreate?.config.name ?? 'Primary';
   let shouldStartIndexing = false;
+  let primarySource: IndexManagementWorkspaceContext['primarySource'];
+  const bindingKey = getWorkspaceIndexBindingKey(hash);
+  const storedBindingRaw = context.workspaceState.get<unknown>(bindingKey);
+  const storedBinding = normalizeWorkspaceIndexBinding(storedBindingRaw);
+  const secondaryRestoreSource = getWorkspaceSecondaryRestoreSource(
+    storedBindingRaw,
+    context.workspaceState.get<boolean>(LEGACY_SECONDARY_IDS_MIGRATION_MARKER_KEY, false)
+  );
+  indexManagementWorkspace = {
+    hash,
+    roots,
+    sharedDbPath,
+    autocreate: !!autocreate,
+  };
 
   if (autocreate) {
     const excludeRules = extractPerIndexExcludesFromAutocreate(autocreate.config);
-    await indexManager.createPrimary(dbPath, roots, indexName, excludeRules);
+    if (autocreate.config.readOnly) {
+      if (!(await fileExists(legacyOrAutocreateDbPath))) {
+        throw new Error(
+          `Autocreate read-only index does not exist: ${legacyOrAutocreateDbPath}`
+        );
+      }
+      await indexManager.openPrimary(legacyOrAutocreateDbPath, roots, indexName, {
+        readOnly: true,
+        excludeRules,
+      });
+    } else {
+      await indexManager.createPrimary(
+        legacyOrAutocreateDbPath,
+        roots,
+        indexName,
+        excludeRules
+      );
+    }
+    primarySource = 'autocreate';
     shouldStartIndexing = true;
   } else {
-    const presence = await hasWorkspaceIndex(hash, dbPath, indexManager.getRegistry());
-    if (presence.exists) {
-      await indexManager.openPrimary(presence.dbPath, roots, indexName);
-      shouldStartIndexing = getConfig().indexOnStartup;
+    type StartupDetails = {
+      source: NonNullable<IndexManagementWorkspaceContext['primarySource']>;
+    };
+    const startupCandidates: Array<
+      StartupPrimaryCandidate<Awaited<ReturnType<IndexManager['openPrimary']>>, StartupDetails>
+    > = [];
+
+    if (storedBinding.primary && (await fileExists(storedBinding.primary.dbPath))) {
+      const savedPrimary = storedBinding.primary;
+      const primaryRoots = savedPrimary.rootDirs?.length
+        ? savedPrimary.rootDirs
+        : roots;
+      startupCandidates.push({
+        dbPath: savedPrimary.dbPath,
+        details: { source: savedPrimary.source },
+        open: () =>
+          indexManager!.openPrimary(
+            savedPrimary.dbPath,
+            primaryRoots,
+            savedPrimary.name ?? indexName,
+            {
+              readOnly: savedPrimary.accessMode === 'readOnly',
+              directoryMappings: savedPrimary.directoryMappings,
+            }
+          ),
+      });
+    } else if (storedBinding.primary) {
+      outputChannel?.appendLine(
+        `Saved primary index is missing; falling back to discovery: ${storedBinding.primary.dbPath}`
+      );
+    }
+
+    const existingIndexes = await findExistingWorkspaceIndexes(
+      hash,
+      sharedDbPath,
+      indexManager.getRegistry(),
+      [legacyDefaultDbPath]
+    );
+    for (const existing of existingIndexes) {
+      const source = samePhysicalIndex(existing.dbPath, sharedDbPath) ? 'shared' : 'legacy';
+      startupCandidates.push({
+        dbPath: existing.dbPath,
+        details: { source },
+        open: () =>
+          indexManager!.openPrimary(existing.dbPath, roots, indexName, {
+            readOnly: false,
+          }),
+      });
+    }
+
+    const selection = await selectFirstUsableStartupPrimary(
+      startupCandidates,
+      (failure) => {
+        const message = failure.error instanceof Error
+          ? failure.error.message
+          : String(failure.error);
+        outputChannel?.appendLine(
+          `Unable to restore ${failure.details.source} primary ${failure.dbPath}; ` +
+            `continuing startup fallback: ${message}`
+        );
+      }
+    );
+    if (selection.selected) {
+      const service = selection.selected.value;
+      primarySource = selection.selected.candidate.details.source;
+      shouldStartIndexing = getConfig().indexOnStartup || service.isReadOnly();
     } else {
       const choice = await vscode.window.showInformationMessage(
-        'Ace Code Search: No index found for this workspace. Create one now?',
+        'Ace Code Search: No index is selected for this workspace.',
         CREATE_INDEX_LABEL,
+        CHOOSE_INDEX_LABEL,
         SKIP_INDEX_LABEL
       );
       if (choice === CREATE_INDEX_LABEL) {
-        await indexManager.createPrimary(dbPath, roots, indexName);
-        shouldStartIndexing = true;
+        try {
+          await indexManager.createPrimary(sharedDbPath, roots, 'Shared workspace index');
+          primarySource = 'shared';
+          shouldStartIndexing = true;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          outputChannel?.appendLine(`Unable to create shared primary ${sharedDbPath}: ${message}`);
+          void vscode.window.showErrorMessage(`Ace Code Search: ${message}`);
+        }
+      } else if (choice === CHOOSE_INDEX_LABEL) {
+        const result = await selectPrimaryIndex(indexManager, indexManagementWorkspace);
+        if (result.status === 'error') {
+          void vscode.window.showErrorMessage(`Ace Code Search: ${result.message}`);
+        } else if (result.status === 'ok') {
+          primarySource = result.source;
+        }
       }
     }
   }
 
-  const secondaryIds = context.workspaceState.get<string[]>('secondaryIndexIds', []);
-  await indexManager.loadWorkspaceSecondaries(secondaryIds);
+  indexManagementWorkspace.primarySource = primarySource;
 
-  IndexManagePanel.register(context, indexManager);
+  if (secondaryRestoreSource === 'keyedBinding') {
+    for (const secondary of storedBinding.secondaries) {
+      try {
+        const service = await indexManager.attachSecondary(secondary.dbPath, {
+          name: secondary.name,
+          readOnly: secondary.accessMode === 'readOnly',
+          directoryMappings: secondary.directoryMappings,
+          rootDirs: secondary.rootDirs,
+          waitForInitialIndex: false,
+        });
+        startSecondaryIndexing(service, secondary.dbPath);
+      } catch (error) {
+        if (secondary.accessMode === 'auto' && !secondary.rootDirs?.length) {
+          try {
+            const service = await indexManager.attachSecondary(secondary.dbPath, {
+              name: secondary.name,
+              readOnly: true,
+              directoryMappings: secondary.directoryMappings,
+              rootDirs: [],
+              waitForInitialIndex: false,
+            });
+            startSecondaryIndexing(service, secondary.dbPath);
+            continue;
+          } catch {
+            // Log the original restore failure below.
+          }
+        }
+        outputChannel?.appendLine(
+          `Unable to restore secondary ${secondary.dbPath}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  } else if (secondaryRestoreSource === 'legacyIds') {
+    const secondaryIds = context.workspaceState.get<string[]>('secondaryIndexIds', []);
+    const restored = await indexManager.loadWorkspaceSecondaries(secondaryIds, {
+      waitForInitialIndex: false,
+    });
+    for (const service of restored) {
+      startSecondaryIndexing(service, service.getDbPath());
+    }
+  }
 
-  searchService = new MultiIndexSearchService(indexManager);
+  if (storedBindingRaw === undefined) {
+    const legacyPrimary = indexManager.getPrimary()
+      ? indexManager.getRegistry().getById(indexManager.getPrimary()!.id)
+      : undefined;
+    const migrated = migrateLegacyWorkspaceBinding(
+      legacyPrimary,
+      indexManager.getAttachedIndexes().map((item) => item.meta)
+    );
+    await context.workspaceState.update(bindingKey, migrated);
+  }
+  await context.workspaceState.update(LEGACY_SECONDARY_IDS_MIGRATION_MARKER_KEY, true);
+  const preserveUnresolvedStoredPrimary =
+    !!storedBinding.primary && !indexManager.getPrimary();
+  if (preserveUnresolvedStoredPrimary) {
+    outputChannel?.appendLine(
+      `Keeping unresolved saved primary binding for a later retry: ${storedBinding.primary!.dbPath}`
+    );
+  } else {
+    await saveWorkspaceIndexBinding(indexManager, context, primarySource);
+  }
+
+  IndexManagePanel.register(context, indexManager, indexManagementWorkspace);
+
+  searchService ??= new MultiIndexSearchService(indexManager);
   const workspaceRoots = folders.map((f) => f.uri.fsPath);
 
   if (panelProvider) {
@@ -420,7 +807,7 @@ async function doInitializeWorkspace(
   attachProgressListener();
 
   if (shouldStartIndexing) {
-    void indexManager.getPrimary()?.startIndexing();
+    startPrimaryIndexing(indexManager.getPrimary());
   } else if (!indexManager.getPrimary()) {
     updateStatusBar('No index');
   } else {
@@ -449,20 +836,49 @@ async function promptAndCreatePrimary(manager: IndexManager): Promise<boolean> {
   const roots = getEffectiveRoots(folders, autocreate?.rootDir);
   const dbPath = autocreate
     ? resolveIndexDbPath(autocreate.config, autocreate.rootDir, globalStorage, hash)
-    : path.join(globalStorage, 'code-search', hash, 'index.db');
+    : manager.getSharedDbPath() ?? getSharedWorkspaceDbPath(getSharedWorkspaceKey(roots));
   const indexName = autocreate?.config.name ?? 'Primary';
   const excludeRules = autocreate ? extractPerIndexExcludesFromAutocreate(autocreate.config) : undefined;
 
   await manager.createPrimary(dbPath, roots, indexName, excludeRules);
-  void manager.getPrimary()?.startIndexing();
+  if (indexManagementWorkspace) {
+    indexManagementWorkspace.primarySource = autocreate ? 'autocreate' : 'shared';
+    await saveWorkspaceIndexBinding(
+      manager,
+      extensionContext,
+      indexManagementWorkspace.primarySource
+    );
+  }
+  startPrimaryIndexing(manager.getPrimary());
   return true;
+}
+
+function startPrimaryIndexing(service: ReturnType<IndexManager['getPrimary']>): void {
+  if (!service) {
+    return;
+  }
+  void service.startIndexing().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    outputChannel?.appendLine(`Primary indexing failed: ${message}`);
+    void vscode.window.showErrorMessage(`Ace Code Search: ${message}`);
+  });
+}
+
+function startSecondaryIndexing(
+  service: Awaited<ReturnType<IndexManager['attachSecondary']>>,
+  dbPath: string
+): void {
+  void service.startIndexing().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    outputChannel?.appendLine(`Secondary indexing failed for ${dbPath}: ${message}`);
+  });
 }
 
 function rebuildSearchBindings(): void {
   if (!indexManager) {
     return;
   }
-  searchService = new MultiIndexSearchService(indexManager);
+  searchService ??= new MultiIndexSearchService(indexManager);
   const folders = vscode.workspace.workspaceFolders;
   const workspaceRoots = folders?.map((f) => f.uri.fsPath) ?? [];
   panelProvider?.rebind(indexManager, searchService, workspaceRoots);
@@ -479,7 +895,6 @@ function attachProgressListener(): void {
   progressListener = () => {
     const combined = indexManager!.getCombinedProgress();
     updateStatusBar(combined.message);
-    panelProvider?.sendIndexStatus();
   };
   indexManager.on('progress', progressListener);
 }
@@ -491,14 +906,15 @@ function updateStatusBar(message: string): void {
   }
 }
 
-function disposeWorkspaceResources(): void {
+async function disposeWorkspaceResources(): Promise<void> {
   if (progressListener && indexManager) {
     indexManager.off('progress', progressListener);
   }
   progressListener = undefined;
-  indexManager?.dispose();
+  await indexManager?.dispose();
   indexManager = undefined;
   searchService = undefined;
+  indexManagementWorkspace = undefined;
 }
 
 async function ensureWorkspaceReady(): Promise<boolean> {
@@ -542,7 +958,41 @@ async function saveSecondaryIds(context: vscode.ExtensionContext): Promise<void>
   if (!indexManager) {
     return;
   }
-  await context.workspaceState.update('secondaryIndexIds', indexManager.getWorkspaceSecondaryIds());
+  await saveWorkspaceIndexBinding(
+    indexManager,
+    context,
+    indexManagementWorkspace?.primarySource
+  );
+}
+
+async function handleCommandOperation(
+  result: IndexOperationResult,
+  context: vscode.ExtensionContext,
+  operation: WorkspaceOperationToken<IndexManager, IndexManagementWorkspaceContext>
+): Promise<void> {
+  if (result.status === 'cancelled') {
+    return;
+  }
+  if (result.status === 'error') {
+    void vscode.window.showErrorMessage(`Ace Code Search: ${result.message}`);
+    return;
+  }
+  if (isWorkspaceOperationCurrent(operation, indexManager, indexManagementWorkspace)) {
+    if (result.source) {
+      operation.workspace.primarySource = result.source;
+    }
+    await saveWorkspaceIndexBinding(
+      operation.manager,
+      context,
+      operation.workspace.primarySource
+    );
+    if (isWorkspaceOperationCurrent(operation, indexManager, indexManagementWorkspace)) {
+      rebuildSearchBindings();
+    }
+  }
+  if (result.message) {
+    void vscode.window.showInformationMessage(`Ace Code Search: ${result.message}`);
+  }
 }
 
 async function switchHeaderSource(): Promise<void> {
@@ -623,18 +1073,30 @@ async function runIndexingSettingsRefresh(): Promise<void> {
 }
 
 export async function deactivate(): Promise<void> {
+  initializationGeneration++;
+  await initializationTail.catch(() => undefined);
   if (indexingSettingsRefreshTimer) {
     clearTimeout(indexingSettingsRefreshTimer);
     indexingSettingsRefreshTimer = undefined;
   }
   if (extensionContext) {
-    void saveSecondaryIds(extensionContext);
+    await saveSecondaryIds(extensionContext);
   }
   await panelProvider?.dispose();
   panelProvider = undefined;
-  disposeWorkspaceResources();
+  await disposeWorkspaceResources();
   statusBarItem?.dispose();
   statusBarItem = undefined;
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  const fs = await import('fs');
+  try {
+    await fs.promises.access(filePath, fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fsMkdir(dir: string): Promise<void> {
