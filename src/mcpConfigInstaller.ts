@@ -376,8 +376,13 @@ export function buildCodexMcpServerBlock(
 
 interface ManagedRange {
   begin: number;
+  endMarkerBegin: number;
   end: number;
   block: string;
+}
+
+interface RecoverableManagedRange {
+  managedEnd: number;
 }
 
 function markerOffsets(content: string, marker: string): number[] {
@@ -402,6 +407,7 @@ function findManagedRange(existing: string): ManagedRange | { warning: string } 
   const end = ends[0] + CODEX_END.length;
   return {
     begin: begins[0],
+    endMarkerBegin: ends[0],
     end,
     block: existing.slice(begins[0], end),
   };
@@ -455,6 +461,45 @@ function isKnownManagedCodexBlock(block: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Codex may append newly managed MCP tables immediately before a trailing
+ * comment. Older Ace blocks used the END marker as that trailing comment, so
+ * the marker can move below unrelated tables even though the Ace table itself
+ * is untouched. Recover only when the prefix before the next TOML table is an
+ * exact known Ace block; all intervening tables remain user-owned.
+ */
+function findRecoverableManagedRange(
+  existing: string,
+  range: ManagedRange
+): RecoverableManagedRange | undefined {
+  const beforeEndMarker = existing.slice(range.begin, range.endMarkerBegin);
+  const tablePattern = /^[ \t]*\[[^\r\n\]]+\][ \t]*(?:#.*)?\r?$/gm;
+  let sawAceTable = false;
+
+  for (const match of beforeEndMarker.matchAll(tablePattern)) {
+    const table = match[0].trim();
+    if (!sawAceTable) {
+      if (table !== `[mcp_servers.${MCP_SERVER_NAME}]`) {
+        return undefined;
+      }
+      sawAceTable = true;
+      continue;
+    }
+
+    const managedEnd = range.begin + (match.index ?? 0);
+    const candidate = `${existing.slice(range.begin, managedEnd).trimEnd()}\n${CODEX_END}`;
+    return isKnownManagedCodexBlock(candidate) ? { managedEnd } : undefined;
+  }
+  return undefined;
+}
+
+function skipOneLineBreak(content: string, offset: number): number {
+  if (content.slice(offset, offset + 2) === '\r\n') {
+    return offset + 2;
+  }
+  return content[offset] === '\n' ? offset + 1 : offset;
 }
 
 function isTomlKey(value: string, expected: string): boolean {
@@ -525,19 +570,22 @@ export function upsertCodexMcpBlock(
   }
   if (range) {
     if (!isKnownManagedCodexBlock(range.block)) {
-      return {
-        content: existing,
-        changed: false,
-        warning:
-          'Preserved the Ace Code Search Codex block because it was modified after installation.',
-      };
+      const recoverable = findRecoverableManagedRange(existing, range);
+      if (!recoverable) {
+        return {
+          content: existing,
+          changed: false,
+          warning:
+            'Preserved the Ace Code Search Codex block because it was modified after installation.',
+        };
+      }
+      const after = skipOneLineBreak(existing, range.end);
+      const preserved = existing.slice(recoverable.managedEnd, range.endMarkerBegin);
+      const content =
+        `${existing.slice(0, range.begin)}${block}\n${preserved}${existing.slice(after)}`;
+      return { content, changed: content !== existing };
     }
-    let after = range.end;
-    if (existing.slice(after, after + 2) === '\r\n') {
-      after += 2;
-    } else if (existing[after] === '\n') {
-      after += 1;
-    }
+    const after = skipOneLineBreak(existing, range.end);
     const content = `${existing.slice(0, range.begin)}${block}${existing.slice(after)}`;
     return { content, changed: content !== existing };
   }
@@ -569,19 +617,23 @@ function removeManagedCodexBlock(existing: string): TextUpdate {
     return { content: existing, changed: false, warning: range.warning };
   }
   if (!isKnownManagedCodexBlock(range.block)) {
-    return {
-      content: existing,
-      changed: false,
-      warning:
-        'Preserved legacy project Codex config because its managed block was modified.',
-    };
+    const recoverable = findRecoverableManagedRange(existing, range);
+    if (!recoverable) {
+      return {
+        content: existing,
+        changed: false,
+        warning:
+          'Preserved legacy project Codex config because its managed block was modified.',
+      };
+    }
+    const after = skipOneLineBreak(existing, range.end);
+    const content =
+      `${existing.slice(0, range.begin)}` +
+      `${existing.slice(recoverable.managedEnd, range.endMarkerBegin)}` +
+      `${existing.slice(after)}`;
+    return { content, changed: content !== existing };
   }
-  let after = range.end;
-  if (existing.slice(after, after + 2) === '\r\n') {
-    after += 2;
-  } else if (existing[after] === '\n') {
-    after += 1;
-  }
+  const after = skipOneLineBreak(existing, range.end);
   const content = `${existing.slice(0, range.begin)}${existing.slice(after)}`;
   return { content, changed: content !== existing };
 }

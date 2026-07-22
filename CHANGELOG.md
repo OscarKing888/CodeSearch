@@ -35,6 +35,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Raise the minimum supported VS Code version to 1.103, the first stable release on Electron 37 / ABI 136 covered by the packaged native matrix. Codex/Cursor launcher configs require PATH Node.js 20, 22, or 24; VS Code uses its editor runtime.
 - Show loaded versus discovered hit counts while streaming and keep search profiling disabled by default.
 
+## [0.8.7] - 2026-07-22
+
+### Changed
+- Fix MacOS errors.
+
 ## [0.8.6] - 2026-07-22
 
 ### Changed

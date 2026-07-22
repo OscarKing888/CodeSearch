@@ -51,6 +51,89 @@ function testCodexMergeSafety(): void {
   assert.ok(migrated.content.includes(JSON.stringify(launcher)));
   assert.ok(!migrated.content.includes(resolveMcpJsPath(root)));
 
+  const displacedEnd = legacyCodexBlock(root).replace(
+    '# END ACE-CODE-SEARCH-MCP\n',
+    [
+      '[mcp_servers.node_repl]',
+      'command = "/managed/node_repl"',
+      '',
+      '[mcp_servers.node_repl.env]',
+      'KEEP = "true"',
+      '',
+      '[mcp_servers.computer-use]',
+      'command = "/managed/computer-use"',
+      'enabled = false',
+      '# END ACE-CODE-SEARCH-MCP',
+      '',
+    ].join('\n')
+  );
+  const recovered = upsertCodexMcpBlock(displacedEnd, launcher, root);
+  assert.strictEqual(recovered.changed, true);
+  assert.strictEqual(recovered.warning, undefined);
+  assert.ok(recovered.content.includes(JSON.stringify(launcher)));
+  assert.ok(!recovered.content.includes(resolveMcpJsPath(root)));
+  assert.strictEqual(
+    recovered.content.match(/\[mcp_servers\.node_repl\]/g)?.length,
+    1
+  );
+  assert.ok(recovered.content.includes('KEEP = "true"'));
+  assert.ok(recovered.content.includes('command = "/managed/computer-use"'));
+  assert.ok(
+    recovered.content.indexOf('# END ACE-CODE-SEARCH-MCP') <
+      recovered.content.indexOf('[mcp_servers.node_repl]')
+  );
+  assert.ok(
+    recovered.content.includes(
+      '# END ACE-CODE-SEARCH-MCP\n\n[mcp_servers.node_repl]'
+    )
+  );
+
+  const displacedEndCrlf = displacedEnd.replace(/\n/g, '\r\n');
+  const recoveredCrlf = upsertCodexMcpBlock(
+    displacedEndCrlf,
+    launcher,
+    root
+  );
+  assert.strictEqual(recoveredCrlf.changed, true);
+  assert.strictEqual(recoveredCrlf.warning, undefined);
+  assert.ok(recoveredCrlf.content.includes(JSON.stringify(launcher)));
+  assert.ok(recoveredCrlf.content.includes('KEEP = "true"'));
+  assert.strictEqual(
+    recoveredCrlf.content.match(/\[mcp_servers\.node_repl\]/g)?.length,
+    1
+  );
+
+  const windowsLauncher = 'C:\\Users\\tester\\.ace-code-search\\mcp-launcher.cjs';
+  const windowsDisplacedEnd = buildCodexMcpServerBlock(windowsLauncher)
+    .replace(
+      '# END ACE-CODE-SEARCH-MCP\n',
+      '[mcp_servers.keep]\ncommand = "keep-me"\n# END ACE-CODE-SEARCH-MCP\n'
+    )
+    .replace(/\n/g, '\r\n');
+  const recoveredWindowsPath = upsertCodexMcpBlock(
+    windowsDisplacedEnd,
+    windowsLauncher
+  );
+  assert.strictEqual(recoveredWindowsPath.changed, true);
+  assert.strictEqual(recoveredWindowsPath.warning, undefined);
+  assert.ok(
+    recoveredWindowsPath.content.includes(JSON.stringify(windowsLauncher))
+  );
+  assert.ok(recoveredWindowsPath.content.includes('command = "keep-me"'));
+
+  const modifiedDisplacedEnd = displacedEnd.replace(
+    'command = "node"',
+    'command = "custom-node"'
+  );
+  const preservedDisplaced = upsertCodexMcpBlock(
+    modifiedDisplacedEnd,
+    launcher,
+    root
+  );
+  assert.strictEqual(preservedDisplaced.changed, false);
+  assert.strictEqual(preservedDisplaced.content, modifiedDisplacedEnd);
+  assert.match(preservedDisplaced.warning ?? '', /modified/);
+
   const malformed = '# BEGIN ACE-CODE-SEARCH-MCP\nkeep = true\n';
   const malformedResult = upsertCodexMcpBlock(malformed, launcher, root);
   assert.strictEqual(malformedResult.changed, false);
@@ -156,9 +239,11 @@ async function testInstallAndLauncher(): Promise<void> {
   const extensionRoot = path.join(tmpDir, 'oscarking888.ace-code-search-999.0.0');
   const homeDir = path.join(tmpDir, 'home');
   const workspaceRoot = path.join(tmpDir, 'workspace');
+  const displacedWorkspaceRoot = path.join(tmpDir, 'displaced-workspace');
   const mcpPath = resolveMcpJsPath(extensionRoot);
   fs.mkdirSync(path.dirname(mcpPath), { recursive: true });
   fs.mkdirSync(workspaceRoot, { recursive: true });
+  fs.mkdirSync(displacedWorkspaceRoot, { recursive: true });
   fs.writeFileSync(
     path.join(extensionRoot, 'package.json'),
     JSON.stringify({ publisher: 'OscarKing888', name: 'ace-code-search', version: '999.0.0' })
@@ -176,12 +261,30 @@ async function testInstallAndLauncher(): Promise<void> {
   const projectConfig = path.join(workspaceRoot, '.codex', 'config.toml');
   fs.mkdirSync(path.dirname(projectConfig), { recursive: true });
   fs.writeFileSync(projectConfig, legacyCodexBlock(extensionRoot));
+  const displacedProjectConfig = path.join(
+    displacedWorkspaceRoot,
+    '.codex',
+    'config.toml'
+  );
+  const preservedProjectTable = [
+    '[mcp_servers.keep]',
+    'command = "keep-me"',
+    '',
+  ].join('\n');
+  fs.mkdirSync(path.dirname(displacedProjectConfig), { recursive: true });
+  fs.writeFileSync(
+    displacedProjectConfig,
+    legacyCodexBlock(extensionRoot).replace(
+      '# END ACE-CODE-SEARCH-MCP\n',
+      `${preservedProjectTable}# END ACE-CODE-SEARCH-MCP\n`
+    )
+  );
 
   try {
     const first = await installMcpClientConfig({
       extensionRoot,
       homeDir,
-      workspaceRoots: [workspaceRoot],
+      workspaceRoots: [workspaceRoot, displacedWorkspaceRoot],
     });
     assert.deepStrictEqual(first.warnings, []);
     assert.strictEqual(first.changed, true);
@@ -190,6 +293,10 @@ async function testInstallAndLauncher(): Promise<void> {
     assert.ok(fs.existsSync(launcherPath));
     assert.ok(fs.existsSync(path.join(homeDir, '.ace-code-search', '.mcp-launcher-managed.json')));
     assert.ok(!fs.existsSync(projectConfig), 'managed project .codex fallback should be removed');
+    assert.strictEqual(
+      fs.readFileSync(displacedProjectConfig, 'utf8'),
+      preservedProjectTable
+    );
 
     const codex = fs.readFileSync(path.join(homeDir, '.codex', 'config.toml'), 'utf8');
     assert.ok(codex.startsWith('model = "gpt"\n'));
@@ -214,10 +321,14 @@ async function testInstallAndLauncher(): Promise<void> {
     );
     assert.strictEqual(launched.status, 0, launched.stderr);
     const payload = JSON.parse(launched.stdout) as { argv: string[] };
-    assert.strictEqual(path.resolve(payload.argv[0]), path.resolve(mcpPath));
+    assert.strictEqual(fs.realpathSync(payload.argv[0]), fs.realpathSync(mcpPath));
     assert.ok(payload.argv.includes('--workspace-root'));
-    assert.ok(payload.argv.includes('--extension-root'));
-    assert.ok(payload.argv.includes(path.resolve(extensionRoot)));
+    const extensionRootFlag = payload.argv.indexOf('--extension-root');
+    assert.ok(extensionRootFlag >= 0);
+    assert.strictEqual(
+      fs.realpathSync(payload.argv[extensionRootFlag + 1]),
+      fs.realpathSync(extensionRoot)
+    );
 
     const second = await installMcpClientConfig({ extensionRoot, homeDir });
     assert.strictEqual(second.changed, false);
