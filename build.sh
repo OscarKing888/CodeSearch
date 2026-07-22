@@ -56,7 +56,7 @@ npm run build
 
 echo
 echo "[2/5] Running tests..."
-node "$SCRIPT_DIR/scripts/rebuild-node.js"
+node "$SCRIPT_DIR/scripts/rebuild-node.js" --all-detected
 npm test
 
 echo

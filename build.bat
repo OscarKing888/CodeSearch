@@ -42,9 +42,9 @@ if errorlevel 1 (
 
 echo.
 echo [2/4] Running tests...
-node "%~dp0scripts\rebuild-node.js"
+node "%~dp0scripts\rebuild-node.js" --all-detected
 if errorlevel 1 (
-    echo [ERROR] better-sqlite3 rebuild for system Node failed.
+    echo [ERROR] better-sqlite3 rebuild for detected Node runtimes failed.
     exit /b 1
 )
 call npm test

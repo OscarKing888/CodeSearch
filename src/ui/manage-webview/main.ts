@@ -465,7 +465,7 @@ function renderActions(item: IndexListItem): string {
     actions.unshift(`<button type="button" class="btn btn-primary attach-btn" data-id="${esc(item.id)}">Open in search</button>`);
   }
   if (item.usage === 'available') {
-    actions.push(`<button type="button" class="btn btn-danger delete-btn" data-id="${esc(item.id)}">Forget</button>`);
+    actions.push(`<button type="button" class="btn btn-danger delete-btn" data-id="${esc(item.id)}" title="Permanently delete the database and its index data">Delete</button>`);
   }
   return actions.join('');
 }

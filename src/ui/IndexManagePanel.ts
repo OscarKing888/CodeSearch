@@ -356,15 +356,20 @@ export class IndexManagePanel {
           const meta = manager.getRegistry().getById(msg.id);
           if (meta) {
             const confirm = await vscode.window.showWarningMessage(
-              `Forget index "${meta.name}"? The database file will not be deleted.`,
-              { modal: true },
-              'Forget'
+              `Permanently delete index "${meta.name}"?`,
+              {
+                modal: true,
+                detail:
+                  `Database: ${meta.dbPath}\n\n` +
+                  'The database and its SQLite index data will be deleted. This cannot be undone.',
+              },
+              'Delete'
             );
-            if (confirm === 'Forget' && this.isCurrentBinding(binding)) {
+            if (confirm === 'Delete' && this.isCurrentBinding(binding)) {
               await this.afterMutation(
                 binding,
-                await deleteIndex(manager, msg.id, false),
-                'Index forgotten',
+                await deleteIndex(manager, msg.id, true),
+                'Index data deleted',
                 meta.dbPath
               );
             }
@@ -801,7 +806,7 @@ export class IndexManagePanel {
       <header class="section-header">
         <div>
           <h2 id="availableHeading">Available indexes <span class="count" id="availableCount">0</span></h2>
-          <p class="section-description">Known databases that are not part of the current search.</p>
+          <p class="section-description">Known databases that are not part of the current search. Delete permanently removes their index data.</p>
         </div>
         <label>
           <span class="sr-only">Filter available indexes</span>

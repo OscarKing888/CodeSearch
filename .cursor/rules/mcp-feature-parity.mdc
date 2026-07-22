@@ -13,8 +13,7 @@ When adding or changing Ace Code Search capabilities that agents should use (sea
 4. Sync agent docs in the same change:
    - `.agents/skills/ace-code-search-mcp/SKILL.md`
    - `resources/skills/ace-code-search-mcp/SKILL.md` (must stay byte-identical to the canonical `.agents` copy)
-   - IDE-specific `.cursor` / `.claude` files must stay thin routing wrappers, not duplicate the full Skill
-   - `.cursor/rules/ace-code-search-first.mdc` and packaged guidance under `resources/rules/` when discovery defaults change
+   - Do not create IDE-specific `.github`, `.cursor`, or `.claude` project guidance; current supported clients share `.agents/skills`
    - `AGENTS.md` / `README_Dev.md` for MCP behavior notes
 5. If a feature is UI-only or unsafe for agents, explicitly document that it is out of MCP scope instead of silently omitting it.
 

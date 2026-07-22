@@ -14,8 +14,14 @@ import {
   loadRegistryIndexes,
   parseMcpCliArgs,
   pathComparisonKey,
+  resolveRawWorkspacePath,
   resolveIndexMetas,
 } from '../src/mcp/discover';
+import {
+  CompatibleListRootsResultSchema,
+  parseClientWorkspaceRoots,
+} from '../src/mcp/clientRoots';
+import { installPostInitializeToolRefresh } from '../src/mcp/serverLifecycle';
 import { McpIndexSession, OpenedIndex } from '../src/mcp/session';
 import { McpToolHandlers, mergeSearchOptions } from '../src/mcp/tools';
 
@@ -59,6 +65,35 @@ function testDefaultOptionsAndPathCase(): void {
     pathComparisonKey('/Project/File.ts', 'linux'),
     pathComparisonKey('/project/file.ts', 'linux')
   );
+  assert.strictEqual(
+    resolveRawWorkspacePath('C:\\Work\\Project', 'win32'),
+    'C:\\Work\\Project'
+  );
+  assert.strictEqual(
+    resolveRawWorkspacePath('\\\\server\\share\\Project', 'win32'),
+    '\\\\server\\share\\Project'
+  );
+  assert.strictEqual(
+    resolveRawWorkspacePath('/Users/alice/Project', 'darwin'),
+    '/Users/alice/Project'
+  );
+  assert.strictEqual(resolveRawWorkspacePath('C:\\Work\\Project', 'darwin'), undefined);
+  assert.strictEqual(resolveRawWorkspacePath('relative/project', 'win32'), undefined);
+  assert.strictEqual(resolveRawWorkspacePath('relative/project', 'darwin'), undefined);
+}
+
+async function testPostInitializeToolRefresh(): Promise<void> {
+  const calls: string[] = [];
+  const target = {
+    oninitialized: () => calls.push('previous'),
+    sendToolListChanged: async () => {
+      calls.push('tools/list_changed');
+    },
+  };
+  installPostInitializeToolRefresh(target, (message) => calls.push(message));
+  target.oninitialized();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepStrictEqual(calls, ['previous', 'tools/list_changed']);
 }
 
 async function withTempIndex(
@@ -359,7 +394,49 @@ async function testSafeAutomaticDiscovery(): Promise<void> {
     });
     assert.deepStrictEqual(session.listIndexes().map((item) => item.id), ['a']);
     assert.ok(session.listWarnings().some((warning) => warning.includes('missing')));
+
+    const otherSession = await McpIndexSession.create({
+      workspaceRoots: [workspaceB],
+      registryCandidates: candidates,
+    });
+    assert.deepStrictEqual(otherSession.listIndexes().map((item) => item.id), ['b']);
+
+    const sessionHandlers = new McpToolHandlers(session);
+    const otherHandlers = new McpToolHandlers(otherSession);
+    const sessionSearch = JSON.parse(
+      sessionHandlers.searchCode({ query: 'scopeSymbolA' }).content[0].text
+    ) as { hitCount: number; hits: Array<{ localPath: string }> };
+    const otherSearch = JSON.parse(
+      otherHandlers.searchCode({ query: 'scopeSymbolB' }).content[0].text
+    ) as { hitCount: number; hits: Array<{ localPath: string }> };
+    const crossWorkspaceSearch = JSON.parse(
+      sessionHandlers.searchCode({ query: 'scopeSymbolB' }).content[0].text
+    ) as { hitCount: number };
+    assert.ok(sessionSearch.hitCount > 0);
+    assert.ok(sessionSearch.hits.every((hit) => hit.localPath.startsWith(workspaceA)));
+    assert.ok(otherSearch.hitCount > 0);
+    assert.ok(otherSearch.hits.every((hit) => hit.localPath.startsWith(workspaceB)));
+    assert.strictEqual(crossWorkspaceSearch.hitCount, 0);
+
+    await session.setWorkspaceRoots([]);
+    assert.deepStrictEqual(session.getWorkspaceRoots(), []);
+    assert.deepStrictEqual(session.listIndexes(), []);
+    assert.strictEqual(sessionHandlers.searchCode({ query: 'scopeSymbolA' }).isError, true);
+    assert.deepStrictEqual(otherSession.getWorkspaceRoots(), [path.resolve(workspaceB)]);
+    assert.deepStrictEqual(otherSession.listIndexes().map((item) => item.id), ['b']);
+    assert.strictEqual(otherHandlers.searchCode({ query: 'scopeSymbolB' }).isError, undefined);
+
+    await session.setWorkspaceRoots([workspaceB]);
+    assert.deepStrictEqual(session.listIndexes().map((item) => item.id), ['b']);
+    otherSession.dispose();
     session.dispose();
+
+    const authoritativeEmpty = await discoverIndexMetas({
+      workspaceRoots: [],
+      registryCandidates: candidates,
+    });
+    assert.deepStrictEqual(authoritativeEmpty.workspaceRoots, []);
+    assert.deepStrictEqual(authoritativeEmpty.metas, []);
 
     const all = await McpIndexSession.create({
       allIndexes: true,
@@ -392,7 +469,20 @@ async function testSafeAutomaticDiscovery(): Promise<void> {
       fileUriToWorkspacePath(pathToFileURL(workspaceA).href),
       path.resolve(workspaceA)
     );
+    assert.strictEqual(fileUriToWorkspacePath(workspaceA), path.resolve(workspaceA));
     assert.strictEqual(fileUriToWorkspacePath('https://example.com/project'), undefined);
+    assert.strictEqual(fileUriToWorkspacePath('relative/project'), undefined);
+
+    const compatibleRoots = CompatibleListRootsResultSchema.parse({
+      roots: [
+        { uri: pathToFileURL(workspaceA).href },
+        { uri: workspaceA, name: 'duplicate raw path' },
+        { uri: 'https://example.com/not-a-workspace' },
+      ],
+    });
+    const parsedRoots = parseClientWorkspaceRoots(compatibleRoots.roots);
+    assert.deepStrictEqual(parsedRoots.workspaceRoots, [path.resolve(workspaceA)]);
+    assert.strictEqual(parsedRoots.rejectedCount, 1);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -454,6 +544,7 @@ function testMultiIndexQuotaDoesNotUnderfill(): void {
 async function main(): Promise<void> {
   testParseCliArgs();
   testDefaultOptionsAndPathCase();
+  await testPostInitializeToolRefresh();
   await testHandlersAndBuildState();
   await testRegistryDiscovery();
   await testPathMappingOnSearchAndRead();

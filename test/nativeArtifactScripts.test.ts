@@ -12,6 +12,9 @@ const matrix = require('../scripts/native-matrix') as {
 const { validateNativeArtifacts } = require('../scripts/validate-native-artifacts') as {
   validateNativeArtifacts(root: string): { failures: unknown[] };
 };
+const { cursorHelperNodePath } = require('../scripts/rebuild-node') as {
+  cursorHelperNodePath(cliPath: string, platform?: NodeJS.Platform): string;
+};
 
 function writeBinary(root: string, artifactName: string, tag: string): void {
   const dir = path.join(root, artifactName, tag);
@@ -26,6 +29,21 @@ function main(): void {
   fs.mkdirSync(artifactsDir, { recursive: true });
 
   try {
+    assert.strictEqual(
+      cursorHelperNodePath(
+        'C:\\Program Files\\cursor\\resources\\app\\bin\\cursor.cmd',
+        'win32'
+      ),
+      'C:\\Program Files\\cursor\\resources\\app\\resources\\helpers\\node.exe'
+    );
+    assert.strictEqual(
+      cursorHelperNodePath(
+        '/Applications/Cursor.app/Contents/Resources/app/bin/cursor',
+        'darwin'
+      ),
+      '/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node'
+    );
+
     for (const target of matrix.RELEASE_TARGETS) {
       const electronArtifact =
         `electron-native-${target.platform}-${target.arch}`;

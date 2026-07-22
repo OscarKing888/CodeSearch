@@ -9,13 +9,18 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Add per-database single-writer leases with automatic read-only fallback/takeover, writer-owner status, safe read-only schema validation, restored Secondary access modes, and fail-safe orphan reclaim-guard handling.
 - Redesign Manage Indexes around a dominant Primary, subordinate Secondaries, a single scoped property inspector, and a lower-priority Available list; inherited/global exclusion rules now visibly include the effective Unreal defaults while per-index additions remain separate.
 - Add a workspace-wide C++/UE class inheritance panel that opens without a prior search, caches declarations incrementally in each writable index, and preserves read-only legacy-index compatibility through an in-memory fallback.
+- Add permanent deletion for Available indexes in Manage Indexes, including exact-path confirmation, SQLite WAL/SHM cleanup, and existing cross-IDE reference/lock safeguards.
 - Add hierarchy/context SVG toolbar icons, filter-clear selection reveal, and subclass expand/collapse actions in the class-row context menu.
-- Add one canonical project Agent Skill under `.agents/skills`, with thin Cursor Rule and Claude compatibility wrappers; VS Code Copilot project instructions are now an explicit optional install instead of part of the default layout.
+- Add one canonical project Agent Skill under `.agents/skills`, shared by current Codex, VS Code/Copilot, and Cursor clients; verified managed legacy wrappers are cleaned up without touching user-modified files.
 - Add a stable user-level MCP launcher for Codex/Cursor that discovers the newest installed extension, plus dynamic VS Code MCP provider registration; no project `.codex` config or version-pinned MCP path is required.
+- Add workspace-scoped cross-process MCP runtime status in the search status bar: gray Waiting, green Ready, and a privacy-safe yellow human-readable action such as `正在搜索 “xxx”`, with heartbeat, readable concurrency hints, and stale-session handling.
 - Add fail-closed migration for managed legacy Skill/rule/config copies, preserving user-modified, unmanaged, or malformed files and configs with warnings; activation never installs silently.
 - Add project maintainer rule `.cursor/rules/mcp-feature-parity.mdc` so searchable feature work keeps MCP tools, Skill templates, and guidance docs in sync.
 
 ### Fixed
+- Accept Cursor MCP roots that arrive as absolute Windows paths while preserving standard macOS/POSIX paths, refresh per-session scope after `roots/list_changed`, fail closed to zero indexes when a roots-capable client returns invalid/empty roots instead of broadening to the launcher cwd, and keep every IDE's stdio scope and tool responses isolated even though runtime status is aggregated for display.
+- Recover Cursor shared-process MCP instances that remain connected/loading with a zero-tool snapshot by re-advertising the tool list after protocol initialization; retry transient Windows sharing violations during atomic status heartbeat replacement.
+- Include the installed Cursor helper Node ABI in local `build.bat` / `build.sh` packages, preventing Cursor-specific MCP failures when its embedded Node differs from the system Node used to build the VSIX.
 - Preserve the working Primary when replacement validation or registry persistence fails, atomically publish complete writer-lock owner records, keep concurrent registry Primary selections and first-open physical paths unique with durable last-saver semantics, hold the registry lease through destructive path validation/commit, prevent one physical DB from being opened/deleted as conflicting Primary/Secondary entries, stop disposed indexing work, isolate bindings during workspace changes, and reject unsafe moves of live WAL databases.
 - Detect when PATH `code` is Cursor's shim on macOS and install into the real Visual Studio Code.app CLI / `~/.vscode/extensions` instead.
 - Fix MCP defaults, multi-index quotas, mapped-path lookups, partial-build reporting, and discovery resilience; default registry access is constrained to MCP workspace roots unless explicitly authorized.
@@ -29,6 +34,36 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Store new workspace indexes in the shared OS application-data directory while retaining legacy per-editor `globalStorage` databases, registry fields, and downgrade-compatible Secondary IDs; `code-search.autocreate` remains authoritative.
 - Raise the minimum supported VS Code version to 1.103, the first stable release on Electron 37 / ABI 136 covered by the packaged native matrix. Codex/Cursor launcher configs require PATH Node.js 20, 22, or 24; VS Code uses its editor runtime.
 - Show loaded versus discovered hit counts while streaming and keep search profiling disabled by default.
+
+## [0.8.6] - 2026-07-22
+
+### Changed
+- add delete index
+
+## [0.8.5] - 2026-07-22
+
+### Changed
+- Show MCP search content
+
+## [0.8.4] - 2026-07-22
+
+### Changed
+- Fix MCP, add delete operation
+
+## [0.8.3] - 2026-07-22
+
+### Changed
+- Fix MCP
+
+## [0.8.2] - 2026-07-22
+
+### Changed
+- Fix MCP
+
+## [0.8.1] - 2026-07-22
+
+### Changed
+- Add MCP status display
 
 ## [0.8.0] - 2026-07-20
 

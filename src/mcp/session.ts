@@ -150,7 +150,7 @@ export class McpIndexSession {
   }
 
   async setWorkspaceRoots(workspaceRoots: string[]): Promise<void> {
-    if (this.options.db || this.options.allIndexes || workspaceRoots.length === 0) {
+    if (this.options.db || this.options.allIndexes) {
       return;
     }
     const nextRoots = workspaceRoots.map((root) => path.resolve(root));

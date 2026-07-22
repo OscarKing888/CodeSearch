@@ -40,6 +40,12 @@ interface Suggestion {
   freq: number;
 }
 
+interface McpStatusPayload {
+  state: 'waiting' | 'ready' | 'busy';
+  summary?: string;
+  activeCount?: number;
+}
+
 type SortColumn = 'path' | 'line' | 'code';
 type SortDirection = 'asc' | 'desc';
 
@@ -108,6 +114,7 @@ const btnManage = document.getElementById('btnManage') as HTMLButtonElement;
 const btnInstallGuidance = document.getElementById('btnInstallGuidance') as HTMLButtonElement;
 const btnSettings = document.getElementById('btnSettings') as HTMLButtonElement;
 const statusHits = document.getElementById('statusHits') as HTMLSpanElement;
+const statusMcp = document.getElementById('statusMcp') as HTMLSpanElement;
 const statusIndex = document.getElementById('statusIndex') as HTMLSpanElement;
 const statusVersion = document.getElementById('statusVersion') as HTMLSpanElement;
 const resultsEl = document.getElementById('results') as HTMLDivElement;
@@ -272,6 +279,31 @@ function setStatusReady(): void {
 
 function setStatusVersion(version: string): void {
   statusVersion.textContent = version ? `v${version}` : '';
+}
+
+function setMcpStatus(status: McpStatusPayload): void {
+  const state = ['waiting', 'ready', 'busy'].includes(status?.state)
+    ? status.state
+    : 'waiting';
+  statusMcp.className = `status-mcp ${state}`;
+  switch (state) {
+    case 'ready':
+      statusMcp.textContent = 'MCP: Ready';
+      statusMcp.title = 'Ace Code Search MCP is ready for this workspace';
+      break;
+    case 'busy': {
+      const summary = typeof status.summary === 'string' && status.summary
+        ? status.summary
+        : '正在处理请求';
+      statusMcp.textContent = `MCP: ${summary}`;
+      statusMcp.title = `Ace Code Search MCP 请求：${summary}`;
+      break;
+    }
+    default:
+      statusMcp.textContent = 'MCP: Waiting';
+      statusMcp.title = 'No active Ace Code Search MCP service for this workspace';
+      break;
+  }
 }
 
 function setSearchingStatus(hitCount?: number): void {
@@ -1516,6 +1548,10 @@ window.addEventListener('message', (event) => {
         text += ` +${msg.secondaryIndexes.length} secondary`;
       }
       statusIndex.textContent = text;
+      break;
+    }
+    case 'mcpStatus': {
+      setMcpStatus(msg.status as McpStatusPayload);
       break;
     }
     case 'autocomplete': {

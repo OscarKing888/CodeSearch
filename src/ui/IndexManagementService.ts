@@ -561,8 +561,16 @@ export async function deleteIndex(
   if (manager.getPrimary()?.id === id) {
     return 'Cannot delete the active primary index';
   }
+  if (deleteFiles && manager.getAttachedIndex(id)) {
+    return 'Close the Secondary index before deleting its data';
+  }
   const ok = await manager.deleteIndex(id, deleteFiles);
-  return ok ? null : 'Delete failed';
+  if (ok) {
+    return null;
+  }
+  return deleteFiles
+    ? 'Index data could not be deleted because the database is active, referenced elsewhere, or locked by another IDE'
+    : 'Delete failed';
 }
 
 export async function refreshIndexById(manager: IndexManager, id: string): Promise<string | null> {
@@ -779,16 +787,18 @@ export async function confirmAndDelete(
   id: string,
   name: string
 ): Promise<string | null> {
+  const dbPath = manager.getRegistry().getById(id)?.dbPath;
   const confirm = await vscode.window.showWarningMessage(
-    `Delete index "${name}"?`,
-    { modal: true },
-    'Delete',
-    'Delete files'
+    `Permanently delete index "${name}"?`,
+    {
+      modal: true,
+      detail: dbPath
+        ? `Database: ${dbPath}\n\nThe database and its SQLite index data will be deleted. This cannot be undone.`
+        : 'The database and its SQLite index data will be deleted. This cannot be undone.',
+    },
+    'Delete'
   );
   if (confirm === 'Delete') {
-    return deleteIndex(manager, id, false);
-  }
-  if (confirm === 'Delete files') {
     return deleteIndex(manager, id, true);
   }
   return null;

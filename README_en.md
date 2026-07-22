@@ -25,7 +25,8 @@ When VS Code and Cursor open the same folder or workspace on one machine, newly 
 - **Secondary indexes**: **Open Secondary...** opens an auto-discovered or manually selected database. Read-only is the default; automatic single-writer is available after reliable source roots are known. Open Secondaries participate in every search
 - **Safe readers**: a read-only index never scans roots, starts a watcher, migrates schema, or writes the database. Invalid databases fail before the active Primary is replaced
 - **Clear property scopes**: Manage Indexes emphasizes the Primary, keeps Secondaries subordinate, and separates `Index content` from `This workspace`. Effective Unreal defaults are shown read-only while Additional exclusions stay editable per index, so an empty custom field no longer hides that `Binaries`, `Intermediate`, and `Saved` are excluded
-- **Legacy compatibility**: existing VS Code/Cursor `globalStorage` indexes are neither moved nor deleted and continue to open as Legacy sources; `code-search.autocreate` still takes precedence and controls its configured path
+- **Delete Available indexes**: **Delete** shows the full database path for confirmation, then permanently removes the database and its SQLite WAL/SHM data. Deletion is refused while the index is active, referenced by another catalog entry, or locked by another IDE
+- **Legacy compatibility**: existing VS Code/Cursor `globalStorage` indexes are not automatically moved or deleted and continue to open as Legacy sources; `code-search.autocreate` still takes precedence and controls its configured path
 
 New shared database locations:
 
@@ -125,7 +126,7 @@ There is currently no dedicated strict `wholeWord` parameter; search a complete 
 ### Discovery and read-only behavior
 
 - With no arguments, the server tolerantly discovers VS Code/Cursor `globalStorage` registries; broken automatic sources are reported in `list_indexes.warnings` instead of aborting startup
-- By default it exposes only indexes fully contained by MCP client roots (then `--workspace-root` / cwd). Parent or mixed-root indexes fail closed; cross-workspace access requires explicit `--all-indexes`
+- By default it exposes only indexes fully contained by MCP client roots, accepting both standard `file://` URIs and Cursor's absolute Windows-path compatibility form. Once a client advertises roots, an empty, invalid, or failed response clears that session's scope instead of falling back to a potentially broad cwd; only clients without roots capability use `--workspace-root` / cwd. Parent or mixed-root indexes fail closed; cross-workspace access requires explicit `--all-indexes`
 - Use strict `--registry <registry.json>` or explicitly authorized `--db <index.db>` sources; when more than one index is visible, pass `indexId`
 - MCP never indexes, starts watchers, or writes databases/registries
 - Primary/Secondary selection and writer leases are intentionally editor-side management operations, not MCP mutation tools; MCP only opens registered shared/manual databases read-only and never creates `.writer.lock`
@@ -142,9 +143,7 @@ npm run mcp -- --registry /path/to/registry.json --workspace-root /path/to/works
 
 The toolbar document-check button (or **Ace Code Search: Install Agent Integration (Project Guidance + User MCP)**) writes:
 
-- The only full project Skill: `.agents/skills/ace-code-search-mcp/SKILL.md`
-- Thin Cursor routing Rule: `.cursor/rules/ace-code-search-first.mdc`
-- Thin Claude compatibility wrapper: `.claude/skills/ace-code-search-mcp/SKILL.md`
+- The sole project Skill: `.agents/skills/ace-code-search-mcp/SKILL.md`, shared by current Codex, VS Code/Copilot, and Cursor clients
 - Stable user launcher: `~/.ace-code-search/mcp-launcher.cjs` (discovers the newest installed extension on every launch)
 - Codex/Cursor user configs: `~/.codex/config.toml` and `~/.cursor/mcp.json`
 - Supported VS Code versions discover the extension's `ace-code-search.mcp-servers` provider directly
@@ -153,16 +152,17 @@ The toolbar document-check button (or **Ace Code Search: Install Agent Integrati
 >
 > Codex/Cursor launcher configs require `node` on the client PATH; packaged native bindings cover Node.js 20, 22, and 24. VS Code's dynamic provider uses the editor runtime and does not need a separate PATH Node.
 
-Keep the full Skill only in `.agents`; it is no longer copied into `.cursor/skills`. The normal install does **not** create project `.codex/config.toml` or `.github/instructions`, and activation never writes silently. User-modified files, invalid markers, and custom MCP entries are preserved with warnings.
+Keep project guidance only in `.agents`; the normal install does **not** create project `.codex`, `.github`, `.cursor`, or `.claude` guidance, and activation never writes silently. User-modified files, invalid markers, and custom MCP entries are preserved with warnings.
 
-The Instruction/Rule prefers Ace Code Search MCP when a matching index exists, but falls back to `rg`/filesystem search when the index is missing, incomplete, stale, or excludes the target.
+The Skill prefers Ace Code Search MCP when a matching index exists, but falls back to `rg`/filesystem search when the index is missing, incomplete, stale, or excludes the target.
+
+The center of the search status bar shows the MCP service for the current workspace: gray **Waiting** before a client connects, green **Ready** while a live session is available, and a privacy-safe yellow human-readable action such as `正在搜索 “xxx”` (searching), `正在读取 File.ts:12–20` (reading), or `正在获取索引` (loading indexes). Multiple VS Code, Cursor, and Codex sessions are aggregated for display only; each IDE instance retains its own stdio session, index scope, and tool responses. Stale sessions disappear after the heartbeat timeout.
 
 Optional personal command:
 
-- **Ace Code Search: Install Optional VS Code Copilot Search Instruction** — explicitly opts into a project `.github/instructions` wrapper
 - **Ace Code Search: Copy Cursor User Rule (Personal)** — for Cursor Settings → User Rules only
 
-> Verifiably managed, unmodified legacy project `.cursor/skills`, project `.codex`, and default `.github/instructions` files are migrated/removed; personal client copies and files of uncertain ownership are retained. See [README_Dev.md — MCP (AI Agent)](README_Dev.md#mcp-ai-agent).
+> Verifiably managed, unmodified legacy project `.cursor/skills`, `.cursor/rules`, `.claude/skills`, project `.codex`, and `.github/instructions` files are migrated/removed; personal client copies and files of uncertain ownership are retained. See [README_Dev.md — MCP (AI Agent)](README_Dev.md#mcp-ai-agent).
 
 ## Feature List
 
@@ -187,7 +187,8 @@ Optional personal command:
 | | `code-search.autocreate` config file | ✅ JSON auto-create |
 | | Ace Code Search CLI | ✅ `npm run cli` / `ess.bat` |
 | **AI Agent** | Read-only stdio MCP | ✅ Index discovery, search, snapshot reads, header/source pairing |
-| | Skill / search-preference guidance | ✅ One `.agents` Skill + thin Cursor/Claude wrappers; VS Code Instruction is opt-in |
+| | Skill / search-preference guidance | ✅ One shared `.agents` Skill for Codex, VS Code/Copilot, and Cursor |
+| | MCP runtime status | ✅ Workspace-scoped Waiting / Ready / request summary |
 | **Search** | Single / multi-word / phrase | ✅ |
 | | Wildcard `*` (word-level) | ✅ |
 | | Wildcards (inline / cross-line) `"this * that"` / `"this *:100 that"` | ✅ |
@@ -230,7 +231,7 @@ Legend: ✅ Done · 🟡 Partial · ⬜ Planned
 | Previous Hit | `Ctrl+Alt+[` |
 | Refresh Index | Command palette |
 | Manage Indexes | Toolbar ⚙ |
-| Install Agent Skill / Rule | Toolbar document-check icon / command palette (writes into the current project) |
+| Install Agent Skill | Toolbar document-check icon / command palette (writes `.agents` into the current project) |
 | Show Class Inheritance Tree | Toolbar hierarchy icon / command palette |
 | Choose Workspace Primary Index | Command palette |
 | Open Secondary Index | Command palette |
@@ -245,6 +246,6 @@ build.bat
 
 macOS / Linux: `chmod +x install.sh build.sh install-extension.sh bump-version.sh`, then `./install.sh` → `./build.sh` → `./install-extension.sh`.
 
-See [AI Agent / MCP Support](#ai-agent--mcp-support) above for tools, search parameters, and Skill/Rule installation.
+See [AI Agent / MCP Support](#ai-agent--mcp-support) above for tools, search parameters, and Skill installation.
 
 For configuration, Phase 2/3 usage, and CLI details, see [README_Dev.md](README_Dev.md) and [PHASE2.md](PHASE2.md).

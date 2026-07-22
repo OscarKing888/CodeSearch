@@ -923,26 +923,43 @@ export class IndexManager extends EventEmitter {
 
     let administrativeLease: IndexWriterLease | undefined;
     if (deleteFiles && meta) {
-      const leaseResult = await acquireIndexWriterLease(meta.dbPath, {
-        label: `${this.writerLabel} (delete index)`,
-      });
-      if (!leaseResult.acquired) {
+      if (fs.existsSync(`${meta.dbPath}.writer.lock.reclaim`)) {
         return false;
       }
-      administrativeLease = leaseResult.lease;
-      if (this.disposed) {
+      try {
+        const leaseResult = await acquireIndexWriterLease(meta.dbPath, {
+          label: `${this.writerLabel} (delete index)`,
+        });
+        if (!leaseResult.acquired) {
+          return false;
+        }
+        administrativeLease = leaseResult.lease;
+      } catch (error) {
+        const noIndexArtifacts = [
+          meta.dbPath,
+          `${meta.dbPath}-wal`,
+          `${meta.dbPath}-shm`,
+          `${meta.dbPath}.writer.lock`,
+          `${meta.dbPath}.writer.lock.reclaim`,
+        ].every((dataPath) => !fs.existsSync(dataPath));
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !noIndexArtifacts) {
+          throw error;
+        }
+      }
+      if (administrativeLease && this.disposed) {
         await administrativeLease.release().catch(() => undefined);
         this.assertActive();
       }
     }
 
     try {
+      let physicalDeleteSucceeded = !deleteFiles;
       const registrySnapshot = this.registry.snapshot();
       const removed = this.registry.remove(id);
       if (removed) {
         try {
           if (deleteFiles && meta) {
-            await this.registry.saveWithExclusiveHooks(
+            const deletePhysicalFile = await this.registry.saveWithExclusiveHooks(
               (merged) =>
                 !merged.some(
                   (item) =>
@@ -952,18 +969,25 @@ export class IndexManager extends EventEmitter {
                 if (!deletePhysicalFile) {
                   return;
                 }
-                try {
-                  await fs.promises.unlink(meta.dbPath);
-                  await fs.promises.unlink(`${meta.dbPath}-wal`).catch(() => undefined);
-                  await fs.promises.unlink(`${meta.dbPath}-shm`).catch(() => undefined);
-                } catch (error) {
-                  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-                    // Preserve legacy behavior: forgetting the catalog entry
-                    // succeeds even when filesystem permissions block cleanup.
+                physicalDeleteSucceeded = true;
+                for (const dataPath of [
+                  meta.dbPath,
+                  `${meta.dbPath}-wal`,
+                  `${meta.dbPath}-shm`,
+                ]) {
+                  try {
+                    await fs.promises.unlink(dataPath);
+                  } catch (error) {
+                    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+                      physicalDeleteSucceeded = false;
+                    }
                   }
                 }
               }
             );
+            if (!deletePhysicalFile) {
+              physicalDeleteSucceeded = false;
+            }
           } else {
             await this.registry.save();
           }
@@ -973,7 +997,7 @@ export class IndexManager extends EventEmitter {
         }
         this.assertActive();
       }
-      return removed;
+      return removed && physicalDeleteSucceeded;
     } finally {
       await administrativeLease?.release().catch(() => undefined);
     }

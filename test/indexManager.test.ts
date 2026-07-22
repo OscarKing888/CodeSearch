@@ -349,7 +349,11 @@ async function runDestructiveSafetyTests(): Promise<void> {
       }
       return saveWithExclusiveHooks(prepare, afterWrite);
     };
-    assert.strictEqual(await manager.deleteIndex('delete-current', true), true);
+    assert.strictEqual(
+      await manager.deleteIndex('delete-current', true),
+      false,
+      'physical deletion must report failure when a peer adds a reference before commit'
+    );
     registry.saveWithExclusiveHooks = saveWithExclusiveHooks;
     assert.strictEqual(
       fs.readFileSync(concurrentDeletePath, 'utf8'),
@@ -373,6 +377,34 @@ async function runDestructiveSafetyTests(): Promise<void> {
     assert.strictEqual(await manager.deleteIndex('locked', true), true);
     assert.strictEqual(fs.existsSync(lockedPath), false);
     assert.strictEqual(fs.existsSync(`${lockedPath}.writer.lock`), false);
+
+    const removablePath = path.join(temp, 'removable.db');
+    fs.writeFileSync(`${removablePath}-wal`, 'wal bytes', 'utf8');
+    fs.writeFileSync(`${removablePath}-shm`, 'shm bytes', 'utf8');
+    registry.upsert(makeCatalogMeta('removable', removablePath));
+    await registry.save();
+    assert.strictEqual(await manager.deleteIndex('removable', true), true);
+    assert.strictEqual(fs.existsSync(removablePath), false);
+    assert.strictEqual(fs.existsSync(`${removablePath}-wal`), false);
+    assert.strictEqual(fs.existsSync(`${removablePath}-shm`), false);
+    assert.strictEqual(registry.getById('removable'), undefined);
+
+    const guardedPath = path.join(temp, 'guarded.db');
+    fs.writeFileSync(guardedPath, 'guarded bytes', 'utf8');
+    fs.writeFileSync(`${guardedPath}.writer.lock.reclaim`, 'orphan guard', 'utf8');
+    registry.upsert(makeCatalogMeta('guarded', guardedPath));
+    await registry.save();
+    assert.strictEqual(await manager.deleteIndex('guarded', true), false);
+    assert.strictEqual(fs.existsSync(guardedPath), true);
+    assert.strictEqual(fs.existsSync(`${guardedPath}.writer.lock.reclaim`), true);
+    assert.ok(registry.getById('guarded'));
+
+    const missingPath = path.join(temp, 'missing-parent', 'missing.db');
+    registry.upsert(makeCatalogMeta('missing', missingPath));
+    await registry.save();
+    assert.strictEqual(await manager.deleteIndex('missing', true), true);
+    assert.strictEqual(registry.getById('missing'), undefined);
+    assert.strictEqual(fs.existsSync(path.dirname(missingPath)), false);
 
     const sourcePath = path.join(temp, 'move-source.db');
     const destinationPath = path.join(temp, 'move-destination.db');

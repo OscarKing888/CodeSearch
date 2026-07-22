@@ -41,6 +41,23 @@ export function pathComparisonKey(
   return platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
+function platformPath(platform: NodeJS.Platform): path.PlatformPath {
+  return platform === 'win32' ? path.win32 : path.posix;
+}
+
+/**
+ * Resolve the non-standard raw-path form returned by some MCP clients. Keeping
+ * platform selection explicit makes Windows drive/UNC paths and macOS POSIX
+ * paths independently testable without changing the host running the tests.
+ */
+export function resolveRawWorkspacePath(
+  value: string,
+  platform: NodeJS.Platform = process.platform
+): string | undefined {
+  const implementation = platformPath(platform);
+  return implementation.isAbsolute(value) ? implementation.resolve(value) : undefined;
+}
+
 function resolvedPathKey(filePath: string): string {
   return pathComparisonKey(path.resolve(filePath));
 }
@@ -86,8 +103,11 @@ function isMetaInWorkspace(meta: IndexMeta, workspaceRoots: readonly string[]): 
 }
 
 function normalizeWorkspaceRoots(options: McpCliOptions): string[] {
-  const configured = options.workspaceRoots?.filter(Boolean) ?? [];
-  const roots = configured.length > 0 ? configured : [process.cwd()];
+  // undefined means an older/no-roots client may use the cwd compatibility
+  // fallback. An explicit empty array is authoritative and must expose no
+  // indexes instead of broadening scope back to cwd.
+  const configured = options.workspaceRoots?.filter(Boolean);
+  const roots = configured === undefined ? [process.cwd()] : configured;
   const unique = new Map<string, string>();
   for (const root of roots) {
     const resolved = path.resolve(root);
@@ -131,8 +151,18 @@ function filterToWorkspaceScope(
 }
 
 export function fileUriToWorkspacePath(uri: string): string | undefined {
+  const value = uri.trim();
+  if (!value) {
+    return undefined;
+  }
+  // Compatibility for clients (notably some Cursor versions on Windows) that
+  // put an absolute filesystem path in Root.uri instead of a file:// URI.
+  const rawPath = resolveRawWorkspacePath(value);
+  if (rawPath) {
+    return rawPath;
+  }
   try {
-    const parsed = new URL(uri);
+    const parsed = new URL(value);
     if (parsed.protocol !== 'file:') {
       return undefined;
     }

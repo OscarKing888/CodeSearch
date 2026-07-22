@@ -4,6 +4,7 @@ import { getConfig } from '../config';
 import { ClassHierarchyCacheManager } from '../hierarchy/ClassHierarchyCacheManager';
 import { ClassHierarchyModel } from '../hierarchy/ClassHierarchyModel';
 import { IndexManager } from '../index/IndexManager';
+import { McpStatusMonitor } from '../mcpStatus';
 import { MultiIndexSearchService, MultiSearchResult, MultiSearchStreamBatch, getRelativePath } from '../search/MultiIndexSearchService';
 import { FIRST_BATCH_SIZE, UI_POST_CHUNK_SIZE, yieldToEventLoop } from '../search/searchStreamBuffer';
 import { createRegistry, highlightHitsSync } from '../utils/syntaxHighlight';
@@ -45,16 +46,20 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   private readonly profileFinalizations = new Map<number, Promise<string | undefined>>();
   private hierarchyCache: ClassHierarchyCacheManager | undefined;
   private readonly onIndexStatusChanged = () => this.sendIndexStatus();
+  private readonly onMcpStatusChanged = () => this.sendMcpStatus();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private indexManager: IndexManager,
     private searchService: MultiIndexSearchService,
     private workspaceRoots: string[],
-    private readonly context: vscode.ExtensionContext
+    private readonly context: vscode.ExtensionContext,
+    private readonly mcpStatusMonitor: McpStatusMonitor
   ) {
     this.indexManager.on('progress', this.onIndexStatusChanged);
     this.indexManager.on('indexesChanged', this.onIndexStatusChanged);
+    this.mcpStatusMonitor.on('change', this.onMcpStatusChanged);
+    this.mcpStatusMonitor.setWorkspaceRoots(this.workspaceRoots);
     this.bindHierarchyCache();
     ClassHierarchyPanel.register(
       context,
@@ -78,15 +83,18 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     this.indexManager.on('indexesChanged', this.onIndexStatusChanged);
     this.searchService = searchService;
     this.workspaceRoots = workspaceRoots;
+    this.mcpStatusMonitor.setWorkspaceRoots(workspaceRoots);
     void this.hierarchyCache?.dispose();
     this.bindHierarchyCache();
     ClassHierarchyPanel.refresh();
     this.sendIndexStatus();
+    this.sendMcpStatus();
   }
 
   async dispose(): Promise<void> {
     this.indexManager.off('progress', this.onIndexStatusChanged);
     this.indexManager.off('indexesChanged', this.onIndexStatusChanged);
+    this.mcpStatusMonitor.off('change', this.onMcpStatusChanged);
     await this.disposeActiveSearches();
     this.view = undefined;
     this.webviewReady = false;
@@ -124,6 +132,8 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       this.panelVisible = visible;
       if (!visible) {
         this.panelWebviewFocused = false;
+      } else {
+        this.sendMcpStatus();
       }
       this.updatePanelFocusContext();
     });
@@ -153,6 +163,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
           this.webviewReady = true;
           this.resolveWebviewReadyWaiters();
           this.sendIndexStatus();
+          this.sendMcpStatus();
           this.sendInitConfig();
           this.flushPendingUi();
           break;
@@ -706,6 +717,13 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  sendMcpStatus(): void {
+    this.postMessage({
+      type: 'mcpStatus',
+      status: this.mcpStatusMonitor.getStatus(),
+    });
+  }
+
   private getUiContextLines(): number {
     const stored = this.context.globalState.get<number>(UI_CONTEXT_LINES_KEY);
     if (stored !== undefined) {
@@ -1111,9 +1129,10 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       padding: 4px 4px;
     }
     .status-bar {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
       padding: 4px 8px;
       font-size: 11px;
       color: var(--vscode-descriptionForeground);
@@ -1126,11 +1145,37 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .status-mcp {
+      min-width: 0;
+      overflow: hidden;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status-mcp.waiting {
+      color: var(--vscode-descriptionForeground);
+    }
+    .status-mcp.ready {
+      color: var(--vscode-testing-iconPassed, #2ea043);
+    }
+    .status-mcp.busy {
+      color: var(--vscode-editorWarning-foreground, #cca700);
+    }
     .status-meta {
       display: flex;
       gap: 8px;
-      flex-shrink: 0;
+      justify-content: flex-end;
+      min-width: 0;
+      overflow: hidden;
       white-space: nowrap;
+    }
+    #statusIndex {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #statusVersion {
+      flex-shrink: 0;
     }
     .results {
       flex: 1;
@@ -1382,6 +1427,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   </div>
   <div class="status-bar">
     <span id="statusHits" class="status-hits">Ready</span>
+    <span id="statusMcp" class="status-mcp waiting" title="No active MCP service for this workspace">MCP: Waiting</span>
     <span class="status-meta">
       <span id="statusIndex">Index: idle</span>
       <span id="statusVersion">v${version}</span>

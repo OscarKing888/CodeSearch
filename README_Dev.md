@@ -61,8 +61,6 @@ Workspace Primary/Secondary selection, `workspaceIndexBindingV2`, shared-index c
 The search toolbar document-check button (command **Ace Code Search: Install Agent Integration (Project Guidance + User MCP)**) installs:
 
 - Canonical full Skill: `{workspace}/.agents/skills/ace-code-search-mcp/SKILL.md`
-- Thin Cursor routing Rule: `{workspace}/.cursor/rules/ace-code-search-first.mdc`
-- Thin Claude compatibility wrapper: `{workspace}/.claude/skills/ace-code-search-mcp/SKILL.md`
 - Stable user launcher: `~/.ace-code-search/mcp-launcher.cjs`
 - User MCP configs: `~/.codex/config.toml` and `~/.cursor/mcp.json`
 - A dynamic VS Code MCP provider (`ace-code-search.mcp-servers`) when that API is available
@@ -71,16 +69,29 @@ The launcher discovers the newest installed Ace Code Search extension each time 
 
 Codex/Cursor launcher configs invoke `node` from the client PATH; the published VSIX guarantees native bindings for Node.js 20, 22, and 24. VS Code's dynamic provider uses the editor runtime, so it does not depend on a separate PATH Node.
 
-The full Skill exists only in `.agents`; do not recreate a `.cursor/skills` mirror. Normal installation does not create project `.codex/config.toml` or `.github/instructions`, and activation does not write anything. **Ace Code Search: Install Optional VS Code Copilot Search Instruction** is the explicit opt-in for the project `.github/instructions` wrapper. The personal Cursor User Rule copy helper remains optional.
+The full project Skill exists only in `.agents`, which current Codex, VS Code/Copilot, and Cursor discover natively. Do not recreate project guidance under `.github`, `.cursor`, or `.claude`. The deprecated `codeSearch.installVscodeCopilotInstruction` command ID is retained only as an alias to the canonical installer and never writes `.github/instructions`. The personal Cursor User Rule copy helper remains optional.
 
-Managed files use owner/kind/content-hash markers and atomic replacement. TOML blocks and recognized legacy Cursor JSON entries migrate only when their exact managed shape is known. Invalid markers, malformed configs, custom entries, and user-modified files are preserved with warnings. A legacy project `.codex` block, `.cursor/skills` mirror, or default `.github/instructions` file is removed only when its managed content can be verified.
+Managed files use owner/kind/content-hash markers and atomic replacement. TOML blocks and recognized legacy Cursor JSON entries migrate only when their exact managed shape is known. Invalid markers, malformed configs, custom entries, and user-modified files are preserved with warnings. Legacy project `.codex`, `.cursor/skills`, `.cursor/rules`, `.claude/skills`, and `.github/instructions` entries are removed only when their managed content can be verified.
 
-The packaged Skill source `resources/skills/ace-code-search-mcp/SKILL.md` must stay byte-identical to `.agents/skills/ace-code-search-mcp/SKILL.md`. Packaged Cursor Rule `resources/rules/ace-code-search-first.mdc` must stay byte-identical to `.cursor/rules/ace-code-search-first.mdc`; it is a thin route to the canonical Skill.
+The packaged Skill source `resources/skills/ace-code-search-mcp/SKILL.md` must stay byte-identical to `.agents/skills/ace-code-search-mcp/SKILL.md`.
+
+#### MCP runtime status
+
+`src/mcpStatus.ts` defines the shared runtime record and editor monitor. Each stdio process writes a private atomic record under `~/.ace-code-search/status/`, refreshes its heartbeat every 2 seconds, and removes its own record on graceful shutdown. Tool wrappers store only sanitized summaries: search text is control-character-cleaned and truncated, file tools expose only the basename and line range, and index/database paths are never recorded.
+
+The extension polls every 500 ms, filters sessions to overlapping workspace roots, treats heartbeats older than 6 seconds as unavailable, and deletes session files older than 60 seconds. Active or just-completed requests remain yellow for at least 2 seconds; concurrent sessions show the newest request plus a count. This cross-process aggregation is display-only: each launched stdio server retains an independent `McpIndexSession`, roots refresh generation, and response transport. Status persistence is best-effort, logs only to MCP stderr, and must never delay/fail tool responses or write to MCP stdout. Coverage: `test/mcpStatus.test.ts` and the multi-session assertions in `test/mcpTools.test.ts`.
+
+#### MCP client workspace roots
+
+`src/mcp/clientRoots.ts` bypasses the SDK's strict `file://` result schema for `roots/list` so Cursor versions that return an absolute Windows path in `Root.uri` remain compatible. Standard file URIs and platform-absolute raw paths are normalized per MCP process; relative and non-file values are rejected. A client that advertises roots has an authoritative scope: empty/invalid roots or a failed roots request clear the session to zero indexes rather than falling back to cwd. Clients without roots capability retain the documented `--workspace-root` / cwd compatibility fallback. `notifications/roots/list_changed` refreshes only that process, so simultaneous VS Code/Cursor windows cannot overwrite one another's scopes. Coverage: `test/mcpTools.test.ts`.
+
+Cursor's shared MCP process may publish an initializing durable snapshot before it has requested `tools/list`, which leaves a connected user server visible with zero tools. `src/mcp/serverLifecycle.ts` sends `notifications/tools/list_changed` once the client sends `notifications/initialized`; this prompts a fresh snapshot while preserving the same four tool schemas and independent stdio session.
+
+For local packaging, Cursor may resolve the user MCP `node` command to `Cursor/.../resources/helpers/node` rather than the system Node used by the build terminal. `build.bat` and `build.sh` therefore run `scripts/rebuild-node.js --all-detected`: it follows the installed Cursor CLI to that helper, stages every distinct detected Node 20/22/24 ABI under `native-node/`, and rebuilds the current system Node last so tests still load correctly. CI release packaging continues to merge the complete ABI 115/127/137 matrix on every supported platform.
 
 #### Prefer-indexed-search guidance
 
-- Project Cursor Rule and Claude wrapper: installed by the toolbar command above.
-- Project VS Code Copilot Instruction: installed only by its explicit optional command.
+- Canonical shared project Skill: installed under `.agents/skills` by the toolbar command above.
 - Optional Cursor personal User Rule text: `resources/rules/cursor-user-rule.txt` via **Copy Cursor User Rule (Personal)**.
 
 The guidance prefers indexed MCP tools for code discovery, but requires `rg`/filesystem/direct-read fallback when no matching index exists, `partialIndex` affects completeness, content may be stale, or files are excluded/unindexed. It never treats indexed snapshots as unsaved content.
@@ -214,7 +225,7 @@ See VS Code Settings → **Ace Code Search** for exclude globs, context lines, p
 - **Multi-tab results**: `Ctrl+Enter` new tab, lock tabs with 🔒, close with ×
 - **Shared Primary**: new non-autocreate workspaces use one deterministic DB path shared by VS Code and Cursor; `Ace Code Search: Choose Workspace Primary Index...` also supports an auto-discovered candidate or manually selected `index.db`
 - **Secondary indexes**: `Ace Code Search: Open Secondary Index` opens a discovered or manually selected DB read-only by default; writable mode requires known source roots and the writer lease
-- **Index management**: toolbar ⚙ or `Ace Code Search: Manage Indexes` opens a dedicated editor tab with a compact workspace context, a dominant Primary, subordinate Secondary rows, a lower-priority Available list, and one selected-index inspector. The inspector separates **Index content** (read-only roots, inherited/global rules, Additional exclusions) from **This workspace** (role, access/writer state, directory mappings). Native dialogs own DB/root selection; the UI must not render fake root editing or access-mode controls that the backend cannot commit.
+- **Index management**: toolbar ⚙ or `Ace Code Search: Manage Indexes` opens a dedicated editor tab with a compact workspace context, a dominant Primary, subordinate Secondary rows, a lower-priority Available list, and one selected-index inspector. The inspector separates **Index content** (read-only roots, inherited/global rules, Additional exclusions) from **This workspace** (role, access/writer state, directory mappings). Available **Delete** confirms the exact path and removes the DB plus WAL/SHM sidecars through the manager's cross-process safety checks. Native dialogs own DB/root selection; the UI must not render fake root editing or access-mode controls that the backend cannot commit.
 - **Autocreate**: add `code-search.autocreate` in workspace root (optional JSON config)
 - **Directory mapping**: map `\\server\share => C:\local` for shared indexes
 - **CLI**: `npm run cli -- create|update|list` (see [PHASE2.md](PHASE2.md))
@@ -224,7 +235,7 @@ See VS Code Settings → **Ace Code Search** for exclude globs, context lines, p
 
 Startup precedence is: `code-search.autocreate` → a valid `workspaceIndexBindingV2.<workspace-hash>` Primary → matching legacy/current registry entry → the pre-shared default `{globalStorage}/code-search/<workspace-hash>/index.db` → deterministic shared path → create/choose prompt. Probing the old deterministic path preserves existing indexes even if an older `registry.json` was lost or reset. A missing, corrupt, or incompatible saved/legacy database is logged and skipped so the next distinct candidate can still open; the same failed physical path is not retried through duplicate registry metadata. If no replacement is selected, the unresolved saved Primary binding is preserved for a later retry instead of being erased. `code-search.autocreate` remains authoritative and intentionally fails startup when its configured index cannot open.
 
-Bindings are separated by workspace hash inside editor `workspaceState` and store paths rather than registry IDs, because VS Code and Cursor maintain separate registries. The old `secondaryIndexIds` value is still written for downgrade compatibility, but it is imported only once into V2 state; afterward a keyed binding (including an empty Secondary list) is authoritative so changing workspace roots cannot inherit another root set's Secondary indexes. A keyed Secondary that is temporarily missing, invalid, or unavailable remains in the binding across routine saves and shutdown, so a later startup can retry it; only an explicit **Close** or **Forget** removes that path. Writable Secondary restore opens, registers, and persists the service first, then scans in the background, so a large Secondary cannot block the management/search UI during extension activation. Interactive **Open Secondary** uses the same non-blocking behavior; explicit standalone index creation retains its progress-wait flow.
+Bindings are separated by workspace hash inside editor `workspaceState` and store paths rather than registry IDs, because VS Code and Cursor maintain separate registries. The old `secondaryIndexIds` value is still written for downgrade compatibility, but it is imported only once into V2 state; afterward a keyed binding (including an empty Secondary list) is authoritative so changing workspace roots cannot inherit another root set's Secondary indexes. A keyed Secondary that is temporarily missing, invalid, or unavailable remains in the binding across routine saves and shutdown, so a later startup can retry it; only an explicit **Close** or Available **Delete** removes that path. Writable Secondary restore opens, registers, and persists the service first, then scans in the background, so a large Secondary cannot block the management/search UI during extension activation. Interactive **Open Secondary** uses the same non-blocking behavior; explicit standalone index creation retains its progress-wait flow.
 
 Default shared paths:
 

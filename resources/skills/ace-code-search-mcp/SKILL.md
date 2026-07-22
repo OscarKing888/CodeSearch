@@ -24,7 +24,7 @@ If those tools are missing from the available tool list:
 4. For Cursor, ensure `ace-code-search` exists in `~/.cursor/mcp.json`, then reload MCP.
 5. Fall back to `rg` / filesystem search only after stating that MCP tools are unavailable.
 
-The toolbar **Install Agent Integration (Project Guidance + User MCP)** command installs the canonical project Skill under `.agents/skills`, thin Cursor/Claude routing files, and Codex/Cursor user MCP entries that point to a stable launcher under `~/.ace-code-search/`. It does not create a project `.codex/config.toml` or a `.github/instructions` file.
+The toolbar **Install Agent Integration (Project Guidance + User MCP)** command installs the sole project Skill under `.agents/skills` for Codex, VS Code/Copilot, and Cursor, plus Codex/Cursor user MCP entries that point to a stable launcher under `~/.ace-code-search/`. It does not create project guidance under `.codex`, `.github`, `.cursor`, or `.claude`.
 
 The Codex/Cursor launcher requires `node` on the client PATH and the packaged VSIX guarantees Node.js 20, 22, and 24 ABIs. VS Code's dynamic provider uses the editor runtime instead and does not require a separate PATH Node.
 
@@ -37,7 +37,7 @@ The Codex/Cursor launcher requires `node` on the client PATH and the packaged VS
 5. Use `find_header_source` for indexed C/C++ header/source pairing.
 6. State that results come from an index snapshot when freshness matters. `partialIndex: true` means the persisted build state is incomplete, failed, or unknown.
 
-By default the server exposes only indexes whose mapped output roots are fully contained by the MCP client workspace roots (or `--workspace-root` / process cwd fallback). Parent or mixed-workspace indexes fail closed. `--all-indexes` is an explicit server-launch opt-in for intentional cross-workspace access.
+By default the server exposes only indexes whose mapped output roots are fully contained by the MCP client workspace roots. Standard `file://` roots plus platform-absolute raw paths (Win32 drive/UNC and macOS/POSIX) are accepted for client compatibility. Once a client advertises roots, an empty, invalid, or failed roots response is authoritative empty scope; only clients without roots capability use `--workspace-root` / process cwd fallback. Every IDE instance keeps an independent stdio session, index scope, and tool responses; cross-process aggregation is status-display only. Parent or mixed-workspace indexes fail closed. `--all-indexes` is an explicit server-launch opt-in for intentional cross-workspace access.
 
 ## `search_code` matching parameters
 

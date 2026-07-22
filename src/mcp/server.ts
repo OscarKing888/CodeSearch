@@ -9,8 +9,15 @@
 import * as path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { RootsListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { fileUriToWorkspacePath, parseMcpCliArgs } from './discover';
+import { McpStatusReporter } from '../mcpStatus';
+import {
+  CompatibleListRootsResultSchema,
+  parseClientWorkspaceRoots,
+} from './clientRoots';
+import { parseMcpCliArgs } from './discover';
+import { installPostInitializeToolRefresh } from './serverLifecycle';
 import { McpIndexSession } from './session';
 import { McpToolHandlers } from './tools';
 
@@ -55,6 +62,11 @@ async function main(): Promise<void> {
   const session = await McpIndexSession.create(options);
   const handlers = new McpToolHandlers(session);
   const version = readPackageVersion();
+  const statusReporter = new McpStatusReporter({
+    extensionVersion: version,
+    workspaceRoots: session.getWorkspaceRoots(),
+    log: (message) => console.error(message),
+  });
 
   const server = new McpServer(
     {
@@ -66,40 +78,110 @@ async function main(): Promise<void> {
         'Call list_indexes first, choose the matching workspace index by id, then pass indexId to search_code/read_indexed_file/find_header_source. Results are read-only index snapshots; partialIndex means incomplete or unknown completion state.',
     }
   );
+  installPostInitializeToolRefresh(server.server, (message) => console.error(message));
 
-  let clientScopeRefresh: Promise<void> | undefined;
+  let clientScopeGeneration = 0;
+  let clientScopeRefresh:
+    | { generation: number; promise: Promise<void> }
+    | undefined;
+
+  const applyClientWorkspaceRoots = async (workspaceRoots: string[]): Promise<void> => {
+    try {
+      await session.setWorkspaceRoots(workspaceRoots);
+    } finally {
+      statusReporter.updateWorkspaceRoots(session.getWorkspaceRoots());
+    }
+  };
+
+  const clearClientWorkspaceScope = async (warning: string): Promise<void> => {
+    try {
+      await applyClientWorkspaceRoots([]);
+    } catch (error) {
+      session.recordWarning(
+        `${warning} Clearing the workspace scope also failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return;
+    }
+    session.recordWarning(warning);
+  };
+
+  const refreshClientWorkspaceScope = async (generation: number): Promise<void> => {
+    if (!server.server.getClientCapabilities()?.roots) {
+      return;
+    }
+
+    let result: z.infer<typeof CompatibleListRootsResultSchema>;
+    try {
+      result = await server.server.request(
+        { method: 'roots/list' },
+        CompatibleListRootsResultSchema
+      );
+    } catch (error) {
+      if (generation !== clientScopeGeneration) {
+        return;
+      }
+      await clearClientWorkspaceScope(
+        `Could not read MCP client roots; the client workspace scope was cleared: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return;
+    }
+
+    if (generation !== clientScopeGeneration) {
+      return;
+    }
+    const parsed = parseClientWorkspaceRoots(result.roots);
+    try {
+      await applyClientWorkspaceRoots(parsed.workspaceRoots);
+    } catch (error) {
+      session.recordWarning(
+        `Could not apply MCP client roots; no fallback indexes were retained: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return;
+    }
+    if (parsed.rejectedCount > 0) {
+      session.recordWarning(
+        `${parsed.rejectedCount} MCP client root(s) were ignored because they were not ` +
+          'absolute filesystem paths or file:// URIs.'
+      );
+    }
+    if (parsed.workspaceRoots.length === 0) {
+      session.recordWarning(
+        'The MCP client reported no usable workspace roots; the workspace scope was cleared.'
+      );
+    }
+  };
+
   const ensureClientWorkspaceScope = async (): Promise<void> => {
     if (options.db || options.allIndexes) {
       return;
     }
-    if (!clientScopeRefresh) {
-      clientScopeRefresh = (async () => {
-        if (!server.server.getClientCapabilities()?.roots) {
-          return;
-        }
-        try {
-          const result = await server.server.listRoots();
-          const roots = result.roots
-            .map((root) => fileUriToWorkspacePath(root.uri))
-            .filter((root): root is string => Boolean(root));
-          if (roots.length > 0) {
-            await session.setWorkspaceRoots(roots);
-          } else {
-            session.recordWarning(
-              'The MCP client reported no usable file:// roots; using the static workspace scope fallback.'
-            );
-          }
-        } catch (error) {
-          session.recordWarning(
-            `Could not read MCP client roots; using the static workspace scope fallback: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
-      })();
+    while (true) {
+      const generation = clientScopeGeneration;
+      if (!clientScopeRefresh || clientScopeRefresh.generation !== generation) {
+        clientScopeRefresh = {
+          generation,
+          promise: refreshClientWorkspaceScope(generation),
+        };
+      }
+      await clientScopeRefresh.promise;
+      if (generation === clientScopeGeneration) {
+        return;
+      }
     }
-    await clientScopeRefresh;
   };
+
+  if (!options.db && !options.allIndexes) {
+    server.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
+      clientScopeGeneration++;
+      clientScopeRefresh = undefined;
+    });
+  }
 
   const readOnlyAnnotations = {
     readOnlyHint: true,
@@ -116,10 +198,11 @@ async function main(): Promise<void> {
         'List Ace Code Search SQLite indexes available to this MCP session (id, name, dbPath, roots, token count).',
       annotations: readOnlyAnnotations,
     },
-    async () => {
-      await ensureClientWorkspaceScope();
-      return handlers.listIndexes();
-    }
+    async (args) =>
+      statusReporter.run('list_indexes', args, async () => {
+        await ensureClientWorkspaceScope();
+        return handlers.listIndexes();
+      })
   );
 
   server.registerTool(
@@ -141,10 +224,11 @@ async function main(): Promise<void> {
       },
       annotations: readOnlyAnnotations,
     },
-    async (args) => {
-      await ensureClientWorkspaceScope();
-      return handlers.searchCode(args);
-    }
+    async (args) =>
+      statusReporter.run('search_code', args, async () => {
+        await ensureClientWorkspaceScope();
+        return handlers.searchCode(args);
+      })
   );
 
   server.registerTool(
@@ -162,10 +246,11 @@ async function main(): Promise<void> {
       },
       annotations: readOnlyAnnotations,
     },
-    async (args) => {
-      await ensureClientWorkspaceScope();
-      return handlers.readIndexedFile(args);
-    }
+    async (args) =>
+      statusReporter.run('read_indexed_file', args, async () => {
+        await ensureClientWorkspaceScope();
+        return handlers.readIndexedFile(args);
+      })
   );
 
   server.registerTool(
@@ -180,10 +265,11 @@ async function main(): Promise<void> {
       },
       annotations: readOnlyAnnotations,
     },
-    async (args) => {
-      await ensureClientWorkspaceScope();
-      return handlers.findHeaderSource(args);
-    }
+    async (args) =>
+      statusReporter.run('find_header_source', args, async () => {
+        await ensureClientWorkspaceScope();
+        return handlers.findHeaderSource(args);
+      })
   );
 
   const transport = new StdioServerTransport();
@@ -191,7 +277,11 @@ async function main(): Promise<void> {
     try {
       await server.close();
     } finally {
-      session.dispose();
+      try {
+        await statusReporter.dispose();
+      } finally {
+        session.dispose();
+      }
     }
   };
 
@@ -203,6 +293,7 @@ async function main(): Promise<void> {
   });
 
   await server.connect(transport);
+  await statusReporter.start();
   console.error(
     `Ace Code Search MCP ready (${session.listIndexes().length} index(es), v${version})`
   );

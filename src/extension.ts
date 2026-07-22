@@ -52,11 +52,11 @@ import { migrateUserHeaderSourceKeybindings } from './pairing/migrateHeaderSourc
 import { revealProfileLogFolder } from './utils/searchProfileUi';
 import { installProjectAgentSkill } from './agentSkillInstaller';
 import {
-  installProjectAgentRules,
-  installProjectVscodeInstruction,
+  cleanupLegacyProjectAgentRules,
   readCursorUserRule,
 } from './agentRuleInstaller';
 import { installMcpClientConfig } from './mcpConfigInstaller';
+import { McpStatusMonitor } from './mcpStatus';
 import {
   buildVscodeMcpLaunchSpec,
   VSCODE_MCP_SERVER_DEFINITION_PROVIDER_ID,
@@ -79,6 +79,7 @@ const INDEXING_SETTINGS_REFRESH_DEBOUNCE_MS = 500;
 let indexManager: IndexManager | undefined;
 let searchService: MultiIndexSearchService | undefined;
 let panelProvider: SearchPanelProvider | undefined;
+let mcpStatusMonitor: McpStatusMonitor | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 let initPromise: Promise<void> | undefined;
@@ -103,6 +104,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   configureBetterSqlite3(context.extensionPath);
   extensionContext = context;
   logCpuInfo(context);
+  mcpStatusMonitor = new McpStatusMonitor({
+    workspaceRoots: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+  });
+  mcpStatusMonitor.start();
   registerCommands(context);
   registerVscodeMcpProvider(context);
   // Project Skill/Rule install is explicit (toolbar / command) so we do not
@@ -113,6 +118,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      mcpStatusMonitor?.setWorkspaceRoots(
+        vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? []
+      );
       void initializeWorkspace(context);
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -194,7 +202,9 @@ function registerCommands(context: vscode.ExtensionContext): void {
       void installAgentSkill(context, true);
     }),
     vscode.commands.registerCommand('codeSearch.installVscodeCopilotInstruction', () => {
-      void installVscodeCopilotInstruction(context);
+      // Deprecated compatibility alias. Project guidance now has one canonical
+      // location under .agents and never writes .github/instructions.
+      void installAgentSkill(context, true);
     }),
     vscode.commands.registerCommand('codeSearch.copyCursorUserRule', () => {
       void copyCursorUserRule(context);
@@ -250,7 +260,7 @@ async function installAgentSkill(
     if (!folders || folders.length === 0) {
       if (notify) {
         void vscode.window.showWarningMessage(
-          'Ace Code Search: Open a folder or workspace before installing project Agent Skill / Rule.'
+          'Ace Code Search: Open a folder or workspace before installing the project Agent Skill.'
         );
       }
       return;
@@ -276,23 +286,16 @@ async function installAgentSkill(
 
     for (const folder of folders) {
       const workspaceRoot = folder.uri.fsPath;
-      const rules = await installProjectAgentRules({
-        extensionRoot: context.extensionPath,
-        version,
-        workspaceRoot,
-      });
-      const cursorRule = rules.paths.find(
-        (item) =>
-          item.path ===
-          path.join(workspaceRoot, '.cursor', 'rules', 'ace-code-search-first.mdc')
-      );
       const skill = await installProjectAgentSkill({
         extensionRoot: context.extensionPath,
         version,
         workspaceRoot,
-        cleanupLegacyCursorSkill:
-          cursorRule?.mode === 'installed' && cursorRule.warning === undefined,
       });
+      const canonical = skill.paths.find((item) => item.client === 'agents');
+      const rules =
+        canonical?.mode === 'canonical' && !canonical.warning
+          ? await cleanupLegacyProjectAgentRules({ workspaceRoot })
+          : { changed: false, paths: [], warnings: [] };
 
       for (const item of skill.paths) {
         outputChannel?.appendLine(
@@ -302,7 +305,7 @@ async function installAgentSkill(
       }
       for (const item of rules.paths) {
         outputChannel?.appendLine(
-          `Project Agent Rule [${folder.name}]: ${item.path}` +
+          `Legacy Agent guidance [${folder.name}]: ${item.mode} ${item.path}` +
             (item.changed ? ' (updated)' : '')
         );
       }
@@ -334,7 +337,7 @@ async function installAgentSkill(
         ? installedRoots[0]
         : `${installedRoots.length} workspace folders`;
     void vscode.window.showInformationMessage(
-      `Ace Code Search: Canonical .agents Skill, IDE wrappers, and user MCP config installed for ${rootLabel}. ` +
+      `Ace Code Search: Canonical .agents Skill and user MCP config installed for ${rootLabel}. ` +
         'Restart Codex (or run /mcp) so list_indexes / search_code appear. ' +
         'Codex/Cursor require Node.js 20, 22, or 24 on PATH; VS Code uses its editor runtime.'
     );
@@ -402,53 +405,6 @@ function registerVscodeMcpProvider(context: vscode.ExtensionContext): void {
     ),
     vscode.workspace.onDidChangeWorkspaceFolders(() => changed.fire())
   );
-}
-
-async function installVscodeCopilotInstruction(
-  context: vscode.ExtensionContext
-): Promise<void> {
-  const folders = vscode.workspace.workspaceFolders;
-  if (!folders || folders.length === 0) {
-    void vscode.window.showWarningMessage(
-      'Ace Code Search: Open a folder or workspace before installing the optional Copilot instruction.'
-    );
-    return;
-  }
-
-  const version = String(context.extension.packageJSON.version ?? '0.0.0');
-  const warnings: string[] = [];
-  let changed = 0;
-  try {
-    for (const folder of folders) {
-      const result = await installProjectVscodeInstruction({
-        extensionRoot: context.extensionPath,
-        version,
-        workspaceRoot: folder.uri.fsPath,
-      });
-      if (result.changed) changed++;
-      if (result.warning) warnings.push(result.warning);
-      outputChannel?.appendLine(
-        `Optional VS Code Copilot instruction [${folder.name}]: ${result.path}` +
-          (result.changed ? ' (updated)' : '')
-      );
-    }
-    if (warnings.length > 0) {
-      for (const warning of warnings) outputChannel?.appendLine(`Agent guidance warning: ${warning}`);
-      void vscode.window.showWarningMessage(
-        `Ace Code Search: Copilot instruction install completed with warnings — ${warnings.join(' ')}`
-      );
-      return;
-    }
-    void vscode.window.showInformationMessage(
-      `Ace Code Search: Optional Copilot instruction ${changed > 0 ? 'installed' : 'already current'} for ${folders.length} workspace folder(s).`
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    outputChannel?.appendLine(`Copilot instruction install failed: ${message}`);
-    void vscode.window.showErrorMessage(
-      `Ace Code Search: Failed to install optional Copilot instruction — ${message}`
-    );
-  }
 }
 
 async function copyCursorUserRule(
@@ -775,6 +731,7 @@ async function doInitializeWorkspace(
 
   searchService ??= new MultiIndexSearchService(indexManager);
   const workspaceRoots = folders.map((f) => f.uri.fsPath);
+  mcpStatusMonitor?.setWorkspaceRoots(workspaceRoots);
 
   if (panelProvider) {
     panelProvider.rebind(indexManager, searchService, workspaceRoots);
@@ -784,7 +741,8 @@ async function doInitializeWorkspace(
       indexManager,
       searchService,
       workspaceRoots,
-      context
+      context,
+      mcpStatusMonitor!
     );
   }
 
@@ -1084,6 +1042,8 @@ export async function deactivate(): Promise<void> {
   }
   await panelProvider?.dispose();
   panelProvider = undefined;
+  await mcpStatusMonitor?.dispose();
+  mcpStatusMonitor = undefined;
   await disposeWorkspaceResources();
   statusBarItem?.dispose();
   statusBarItem = undefined;
