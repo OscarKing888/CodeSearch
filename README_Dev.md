@@ -47,8 +47,10 @@ npm run mcp
 npm run mcp -- --all-indexes
 ```
 
-Tools: `list_indexes`, `search_code`, `read_indexed_file`, `find_header_source`.
+Tools: `list_indexes`, `search_code`, `read_indexed_file`, `find_header_source`, `search_class_hierarchy`.
 Results come from the **index snapshot**, not a live filesystem walk. Automatic discovery tolerates broken registries/databases and reports them through `list_indexes.warnings`; explicit `--db` and `--registry` sources remain strict. A missing legacy build-state marker is `unknown`, and every state other than `complete` returns `partialIndex: true`.
+
+`search_class_hierarchy` resolves a case-sensitive qualified class name, or a unique short name, then returns its descendant graph as a flat DAG with indexed and mapped declaration locations. Ambiguous short names return structured candidates. Current cache declarations are reused; pending files are parsed through the shared two-worker parser with an event-loop fallback and are never persisted by MCP. `maxNodes` is 1–5000 or `"all"`; omission reads `~/.ace-code-search/settings.json`, which the application-scoped `codeSearch.mcpClassHierarchyDefaultMaxNodes` setting synchronizes for all clients (default 20, 0 means all). The settings file is not exposed as an MCP tool or result.
 
 Default discovery is scoped to MCP client workspace roots, then explicit repeated `--workspace-root` arguments, then cwd. Every mapped index output root must be contained by a client root, so a parent index or mixed unrelated roots fail closed. Direct `--db` explicitly authorizes that database; `--all-indexes` explicitly opts into cross-workspace registry access. When multiple indexes remain visible, tools require `indexId`.
 
@@ -77,7 +79,7 @@ The packaged Skill source `resources/skills/ace-code-search-mcp/SKILL.md` must s
 
 #### MCP runtime status
 
-`src/mcpStatus.ts` defines the shared runtime record and editor monitor. Each stdio process writes a private atomic record under `~/.ace-code-search/status/`, refreshes its heartbeat every 2 seconds, and removes its own record on graceful shutdown. Tool wrappers store only sanitized summaries: search text is control-character-cleaned and truncated, file tools expose only the basename and line range, and index/database paths are never recorded.
+`src/mcpStatus.ts` defines the shared runtime record and editor monitor. Each stdio process writes a private atomic record under `~/.ace-code-search/status/`, refreshes its heartbeat every 2 seconds, and removes its own record on graceful shutdown. Tool wrappers store only sanitized summaries: search/class text is control-character-cleaned and truncated, file tools expose only the basename and line range, and index/database paths are never recorded.
 
 The extension polls every 500 ms, filters sessions to overlapping workspace roots, treats heartbeats older than 6 seconds as unavailable, and deletes session files older than 60 seconds. Active or just-completed requests remain yellow for at least 2 seconds; concurrent sessions show the newest request plus a count. This cross-process aggregation is display-only: each launched stdio server retains an independent `McpIndexSession`, roots refresh generation, and response transport. Status persistence is best-effort, logs only to MCP stderr, and must never delay/fail tool responses or write to MCP stdout. Coverage: `test/mcpStatus.test.ts` and the multi-session assertions in `test/mcpTools.test.ts`.
 
@@ -85,7 +87,7 @@ The extension polls every 500 ms, filters sessions to overlapping workspace root
 
 `src/mcp/clientRoots.ts` bypasses the SDK's strict `file://` result schema for `roots/list` so Cursor versions that return an absolute Windows path in `Root.uri` remain compatible. Standard file URIs and platform-absolute raw paths are normalized per MCP process; relative and non-file values are rejected. A client that advertises roots has an authoritative scope: empty/invalid roots or a failed roots request clear the session to zero indexes rather than falling back to cwd. Clients without roots capability retain the documented `--workspace-root` / cwd compatibility fallback. `notifications/roots/list_changed` refreshes only that process, so simultaneous VS Code/Cursor windows cannot overwrite one another's scopes. Coverage: `test/mcpTools.test.ts`.
 
-Cursor's shared MCP process may publish an initializing durable snapshot before it has requested `tools/list`, which leaves a connected user server visible with zero tools. `src/mcp/serverLifecycle.ts` sends `notifications/tools/list_changed` once the client sends `notifications/initialized`; this prompts a fresh snapshot while preserving the same four tool schemas and independent stdio session.
+Cursor's shared MCP process may publish an initializing durable snapshot before it has requested `tools/list`, which leaves a connected user server visible with zero tools. `src/mcp/serverLifecycle.ts` sends `notifications/tools/list_changed` once the client sends `notifications/initialized`; this prompts a fresh snapshot while preserving the same five tool schemas and independent stdio session.
 
 For local packaging, Cursor may resolve the user MCP `node` command to `Cursor/.../resources/helpers/node` rather than the system Node used by the build terminal. `build.bat` and `build.sh` therefore run `scripts/rebuild-node.js --all-detected`: it follows the installed Cursor CLI to that helper, stages every distinct detected Node 20/22/24 ABI under `native-node/`, and rebuilds the current system Node last so tests still load correctly. CI release packaging continues to merge the complete ABI 115/127/137 matrix on every supported platform.
 
@@ -347,7 +349,7 @@ flowchart TB
 ├── src/
 │   ├── extension.ts          # 激活、注册命令、生命周期
 │   ├── cli/index.ts          # 独立 CLI（create / update / list）
-│   ├── mcp/                  # 只读 stdio MCP（list/search/read/header-source）
+│   ├── mcp/                  # 只读 stdio MCP（list/search/read/hierarchy/header-source）
 │   │   ├── server.ts
 │   │   ├── session.ts
 │   │   ├── tools.ts

@@ -111,6 +111,7 @@ Ace Code Search includes a standalone, **read-only stdio MCP server** so Cursor,
 | `search_code` | Full-text search with index selection, case, phrase, fuzzy, loose matching, and query filters |
 | `read_indexed_file` | Read a line range from an indexed file snapshot |
 | `find_header_source` | Find indexed C/C++ header/source counterparts |
+| `search_class_hierarchy` | Return a class's indexed descendant DAG with source locations |
 
 Key `search_code` parameters:
 
@@ -122,6 +123,8 @@ Key `search_code` parameters:
 - Query syntax also supports `ext:`, `file:`, `dir:`, `age:`, `+/-` content filters, and `*` wildcards
 
 There is currently no dedicated strict `wholeWord` parameter; search a complete known identifier as a bare token. If punctuation prevents a match, split it according to tokenization—for example, use `better sqlite3` for `better-sqlite3`.
+
+`search_class_hierarchy` matches class names case-sensitively. A qualified name resolves one class; an ambiguous short name returns candidates and declaration locations. Results use a flat DAG so C++ multiple inheritance is preserved. `maxNodes` accepts 1–5000 or `"all"`; when omitted, the shared user setting `codeSearch.mcpClassHierarchyDefaultMaxNodes` applies (20 by default, 0 means all). Current hierarchy cache rows are reused, while missing or stale rows are parsed from the index snapshot in memory without database writes.
 
 ### Discovery and read-only behavior
 
@@ -186,7 +189,7 @@ Optional personal command:
 | | Index management (Primary source / search scope / create / forget / rename) | ✅ Redesigned management panel (editor tab) |
 | | `code-search.autocreate` config file | ✅ JSON auto-create |
 | | Ace Code Search CLI | ✅ `npm run cli` / `ess.bat` |
-| **AI Agent** | Read-only stdio MCP | ✅ Index discovery, search, snapshot reads, header/source pairing |
+| **AI Agent** | Read-only stdio MCP | ✅ Index discovery, search, snapshot reads, class hierarchy, header/source pairing |
 | | Skill / search-preference guidance | ✅ One shared `.agents` Skill for Codex, VS Code/Copilot, and Cursor |
 | | MCP runtime status | ✅ Workspace-scoped Waiting / Ready / request summary |
 | **Search** | Single / multi-word / phrase | ✅ |

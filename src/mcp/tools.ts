@@ -1,4 +1,12 @@
 import * as path from 'path';
+import { ReadonlyClassHierarchyLoader } from '../hierarchy/ReadonlyClassHierarchyLoader';
+import {
+  ClassHierarchyNodeLimit,
+  queryClassHierarchy,
+} from '../hierarchy/classHierarchyQuery';
+import {
+  readMcpClassHierarchyDefaultMaxNodes,
+} from '../mcpSettings';
 import { SearchOptions } from '../types';
 import { pathComparisonKey } from './discover';
 import { DEFAULT_MCP_SEARCH_OPTIONS, McpIndexSession, OpenedIndex } from './session';
@@ -11,6 +19,13 @@ export type McpToolResult = {
 function toolError(message: string): McpToolResult {
   return {
     content: [{ type: 'text', text: message }],
+    isError: true,
+  };
+}
+
+function toolJsonError(data: unknown): McpToolResult {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
     isError: true,
   };
 }
@@ -127,8 +142,69 @@ export interface FindHeaderSourceArgs {
   indexId?: string;
 }
 
+export interface SearchClassHierarchyArgs {
+  className: string;
+  indexId?: string;
+  maxNodes?: ClassHierarchyNodeLimit;
+}
+
+export interface McpToolHandlersOptions {
+  classHierarchyWorkerScript?: string | false;
+  readClassHierarchyDefaultMaxNodes?: () => Promise<ClassHierarchyNodeLimit>;
+  log?: (message: string) => void;
+}
+
 export class McpToolHandlers {
-  constructor(private session: McpIndexSession) {}
+  private readonly classHierarchyLoader: ReadonlyClassHierarchyLoader;
+  private readonly readClassHierarchyDefaultMaxNodes: () => Promise<ClassHierarchyNodeLimit>;
+  private readonly log: (message: string) => void;
+  private readonly loggedSettingsWarnings = new Set<string>();
+
+  constructor(
+    private session: McpIndexSession,
+    options: McpToolHandlersOptions = {}
+  ) {
+    this.log = options.log ?? ((message) => console.error(message));
+    const configuredWorker = options.classHierarchyWorkerScript;
+    const extensionRoot =
+      typeof (session as McpIndexSession & { getExtensionRoot?: () => string })
+        .getExtensionRoot === 'function'
+        ? session.getExtensionRoot()
+        : process.cwd();
+    this.classHierarchyLoader = new ReadonlyClassHierarchyLoader({
+      workerScript:
+        typeof configuredWorker === 'string'
+          ? configuredWorker
+          : path.join(
+              extensionRoot,
+              'dist',
+              'workers',
+              'class-hierarchy-worker.js'
+            ),
+      useWorkers: configuredWorker !== false,
+      warn: (message, error) =>
+        this.log(
+          `[Ace Code Search] ${message}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        ),
+    });
+    this.readClassHierarchyDefaultMaxNodes =
+      options.readClassHierarchyDefaultMaxNodes ??
+      (() =>
+        readMcpClassHierarchyDefaultMaxNodes({
+          log: (message) => {
+            if (!this.loggedSettingsWarnings.has(message)) {
+              this.loggedSettingsWarnings.add(message);
+              this.log(`[Ace Code Search] ${message}`);
+            }
+          },
+        }));
+  }
+
+  async dispose(): Promise<void> {
+    await this.classHierarchyLoader.dispose();
+  }
 
   listIndexes(): McpToolResult {
     return toolJson({
@@ -340,6 +416,73 @@ export class McpToolHandlers {
       return toolJson({
         results,
         note: 'Counterparts must exist in the index; there is no filesystem fallback.',
+      });
+    } catch (error) {
+      return toolError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async searchClassHierarchy(
+    args: SearchClassHierarchyArgs
+  ): Promise<McpToolResult> {
+    if (!args.className || !args.className.trim()) {
+      return toolError('className is required');
+    }
+    if (
+      args.maxNodes !== undefined &&
+      args.maxNodes !== 'all' &&
+      (!Number.isInteger(args.maxNodes) ||
+        args.maxNodes < 1 ||
+        args.maxNodes > 5000)
+    ) {
+      return toolError('maxNodes must be an integer from 1 to 5000 or "all"');
+    }
+
+    try {
+      const targets = this.session.resolveIndexes(args.indexId);
+      const opened = targets[0];
+      const maxNodes =
+        args.maxNodes ?? (await this.readClassHierarchyDefaultMaxNodes());
+      const startedAt = Date.now();
+      const snapshot = await this.classHierarchyLoader.build(
+        opened.service,
+        opened.meta.id
+      );
+      const result = queryClassHierarchy(
+        snapshot.hierarchy,
+        args.className,
+        maxNodes,
+        (indexedPath) => this.session.mapPath(opened, indexedPath)
+      );
+      const common = {
+        className: args.className,
+        indexId: opened.meta.id,
+        indexName: opened.meta.name,
+        partialIndex: snapshot.partialIndex,
+        elapsedMs: Date.now() - startedAt,
+      };
+
+      if (!result.ok) {
+        return toolJsonError({
+          ...common,
+          error: result.error,
+          candidates: result.candidates,
+          note:
+            result.error === 'ambiguous_class'
+              ? 'Use one candidate qualifiedName as className and retry.'
+              : 'Class names are matched case-sensitively against the indexed hierarchy snapshot.',
+        });
+      }
+
+      return toolJson({
+        ...common,
+        rootId: result.rootId,
+        totalNodeCount: result.totalNodeCount,
+        returnedNodeCount: result.returnedNodeCount,
+        truncated: result.truncated,
+        nodes: result.nodes,
+        note:
+          'Class declarations and locations come from the index snapshot; localPath applies directory mappings.',
       });
     } catch (error) {
       return toolError(error instanceof Error ? error.message : String(error));

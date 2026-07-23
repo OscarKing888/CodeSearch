@@ -45,7 +45,7 @@ Options:
   --help             Show this help
 
 Tools:
-  list_indexes, search_code, read_indexed_file, find_header_source
+  list_indexes, search_code, read_indexed_file, find_header_source, search_class_hierarchy
 
 Note: Uses system Node ABI for better-sqlite3 (run npm run rebuild:node after Electron rebuild).
 Log only to stderr — stdout is reserved for MCP JSON-RPC.
@@ -60,7 +60,9 @@ async function main(): Promise<void> {
 
   const options = parseMcpCliArgs(process.argv);
   const session = await McpIndexSession.create(options);
-  const handlers = new McpToolHandlers(session);
+  const handlers = new McpToolHandlers(session, {
+    log: (message) => console.error(message),
+  });
   const version = readPackageVersion();
   const statusReporter = new McpStatusReporter({
     extensionVersion: version,
@@ -75,7 +77,7 @@ async function main(): Promise<void> {
     },
     {
       instructions:
-        'Call list_indexes first, choose the matching workspace index by id, then pass indexId to search_code/read_indexed_file/find_header_source. Results are read-only index snapshots; partialIndex means incomplete or unknown completion state.',
+        'Call list_indexes first, choose the matching workspace index by id, then pass indexId to search_code/read_indexed_file/find_header_source/search_class_hierarchy. Results are read-only index snapshots; partialIndex means incomplete or unknown completion state.',
     }
   );
   installPostInitializeToolRefresh(server.server, (message) => console.error(message));
@@ -272,6 +274,37 @@ async function main(): Promise<void> {
       })
   );
 
+  server.registerTool(
+    'search_class_hierarchy',
+    {
+      title: 'Search Class Hierarchy',
+      description:
+        'Return the indexed descendant inheritance DAG for one case-sensitive class name, including mapped source locations.',
+      inputSchema: {
+        className: z
+          .string()
+          .min(1)
+          .describe('Class short name or qualified name'),
+        indexId: z.string().optional().describe('Limit to one index id or unique name'),
+        maxNodes: z
+          .union([
+            z.number().int().min(1).max(5000),
+            z.literal('all'),
+          ])
+          .optional()
+          .describe(
+            'Maximum returned nodes including the root, or "all". Omit to use the local default (20 unless configured).'
+          ),
+      },
+      annotations: readOnlyAnnotations,
+    },
+    async (args) =>
+      statusReporter.run('search_class_hierarchy', args, async () => {
+        await ensureClientWorkspaceScope();
+        return handlers.searchClassHierarchy(args);
+      })
+  );
+
   const transport = new StdioServerTransport();
   const shutdown = async () => {
     try {
@@ -280,7 +313,11 @@ async function main(): Promise<void> {
       try {
         await statusReporter.dispose();
       } finally {
-        session.dispose();
+        try {
+          await handlers.dispose();
+        } finally {
+          session.dispose();
+        }
       }
     }
   };

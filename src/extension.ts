@@ -56,6 +56,10 @@ import {
   readCursorUserRule,
 } from './agentRuleInstaller';
 import { installMcpClientConfig } from './mcpConfigInstaller';
+import {
+  DEFAULT_MCP_CLASS_HIERARCHY_MAX_NODES,
+  writeMcpClassHierarchyDefaultMaxNodes,
+} from './mcpSettings';
 import { McpStatusMonitor } from './mcpStatus';
 import {
   buildVscodeMcpLaunchSpec,
@@ -75,6 +79,8 @@ const INDEXING_CONFIG_KEYS = [
 ] as const;
 
 const INDEXING_SETTINGS_REFRESH_DEBOUNCE_MS = 500;
+const MCP_CLASS_HIERARCHY_DEFAULT_SETTING =
+  'codeSearch.mcpClassHierarchyDefaultMaxNodes';
 
 let indexManager: IndexManager | undefined;
 let searchService: MultiIndexSearchService | undefined;
@@ -110,6 +116,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   mcpStatusMonitor.start();
   registerCommands(context);
   registerVscodeMcpProvider(context);
+  void syncMcpClassHierarchyDefault(true);
   // Project Skill/Rule install is explicit (toolbar / command) so we do not
   // silently dirty workspace git status on every activation.
   void migrateUserHeaderSourceKeybindings(resolveEditorProduct(), (message) =>
@@ -124,10 +131,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void initializeWorkspace(context);
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (!INDEXING_CONFIG_KEYS.some((key) => e.affectsConfiguration(key))) {
-        return;
+      if (e.affectsConfiguration(MCP_CLASS_HIERARCHY_DEFAULT_SETTING)) {
+        void syncMcpClassHierarchyDefault(false);
       }
-      scheduleIndexingSettingsRefresh();
+      if (INDEXING_CONFIG_KEYS.some((key) => e.affectsConfiguration(key))) {
+        scheduleIndexingSettingsRefresh();
+      }
     })
   );
 
@@ -349,6 +358,33 @@ async function installAgentSkill(
         `Ace Code Search: Failed to install project Agent guidance — ${message}`
       );
     }
+  }
+}
+
+async function syncMcpClassHierarchyDefault(
+  onlyWhenExplicitlyConfigured: boolean
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration('codeSearch');
+  const inspected = config.inspect<number>('mcpClassHierarchyDefaultMaxNodes');
+  const explicitlyConfigured =
+    inspected?.globalValue !== undefined ||
+    inspected?.workspaceValue !== undefined ||
+    inspected?.workspaceFolderValue !== undefined;
+  if (onlyWhenExplicitlyConfigured && !explicitlyConfigured) {
+    return;
+  }
+  const value = config.get<number>(
+    'mcpClassHierarchyDefaultMaxNodes',
+    DEFAULT_MCP_CLASS_HIERARCHY_MAX_NODES
+  );
+  try {
+    await writeMcpClassHierarchyDefaultMaxNodes(value);
+  } catch (error) {
+    outputChannel?.appendLine(
+      `Could not synchronize MCP class hierarchy settings: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 }
 

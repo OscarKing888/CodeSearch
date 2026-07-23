@@ -22,7 +22,11 @@ import {
   parseClientWorkspaceRoots,
 } from '../src/mcp/clientRoots';
 import { installPostInitializeToolRefresh } from '../src/mcp/serverLifecycle';
-import { McpIndexSession, OpenedIndex } from '../src/mcp/session';
+import {
+  applyDirectoryMapping,
+  McpIndexSession,
+  OpenedIndex,
+} from '../src/mcp/session';
 import { McpToolHandlers, mergeSearchOptions } from '../src/mcp/tools';
 
 function testParseCliArgs(): void {
@@ -80,6 +84,48 @@ function testDefaultOptionsAndPathCase(): void {
   assert.strictEqual(resolveRawWorkspacePath('C:\\Work\\Project', 'darwin'), undefined);
   assert.strictEqual(resolveRawWorkspacePath('relative/project', 'win32'), undefined);
   assert.strictEqual(resolveRawWorkspacePath('relative/project', 'darwin'), undefined);
+
+  const windowsMappings = [{ from: 'C:\\SDK', to: 'D:\\Workspace\\SDK' }];
+  assert.strictEqual(
+    applyDirectoryMapping(
+      'C:\\SDK\\Source\\Widget.h',
+      windowsMappings,
+      false,
+      'win32'
+    ),
+    'D:\\Workspace\\SDK\\Source\\Widget.h'
+  );
+  assert.strictEqual(
+    applyDirectoryMapping(
+      'D:\\Workspace\\SDK\\Source\\Widget.h',
+      windowsMappings,
+      true,
+      'win32'
+    ),
+    'C:\\SDK\\Source\\Widget.h'
+  );
+
+  const macMappings = [
+    { from: '/Volumes/SharedSDK', to: '/Users/alice/Workspace/SDK' },
+  ];
+  assert.strictEqual(
+    applyDirectoryMapping(
+      '/Volumes/SharedSDK/Source/Widget.h',
+      macMappings,
+      false,
+      'darwin'
+    ),
+    '/Users/alice/Workspace/SDK/Source/Widget.h'
+  );
+  assert.strictEqual(
+    applyDirectoryMapping(
+      '/Users/alice/Workspace/SDK/Source/Widget.h',
+      macMappings,
+      true,
+      'darwin'
+    ),
+    '/Volumes/SharedSDK/Source/Widget.h'
+  );
 }
 
 async function testPostInitializeToolRefresh(): Promise<void> {
@@ -103,6 +149,7 @@ async function withTempIndex(
     sampleTs: string;
     fooCpp: string;
     fooH: string;
+    hierarchyH: string;
   }) => Promise<void>
 ): Promise<void> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'code-search-mcp-'));
@@ -110,6 +157,7 @@ async function withTempIndex(
   const sampleTs = path.join(tmpDir, 'sample.ts');
   const fooCpp = path.join(tmpDir, 'Foo.cpp');
   const fooH = path.join(tmpDir, 'Foo.h');
+  const hierarchyH = path.join(tmpDir, 'Hierarchy.h');
 
   fs.writeFileSync(
     sampleTs,
@@ -117,6 +165,18 @@ async function withTempIndex(
   );
   fs.writeFileSync(fooCpp, 'int foo() { return 0; }\n');
   fs.writeFileSync(fooH, 'int foo();\n');
+  fs.writeFileSync(
+    hierarchyH,
+    [
+      'class Root {};',
+      'class Left : public Root {};',
+      'class Right : public Root {};',
+      'class Leaf : public Left, public Right {};',
+      'class ExternalChild : public MissingRoot {};',
+      'namespace One { class Duplicate {}; class OneChild : public Duplicate {}; }',
+      'namespace Two { class Duplicate {}; }',
+    ].join('\n')
+  );
 
   const index = new IndexService(dbPath);
   await index.initialize([tmpDir]);
@@ -124,16 +184,19 @@ async function withTempIndex(
   index.dispose();
 
   try {
-    await setup({ tmpDir, dbPath, sampleTs, fooCpp, fooH });
+    await setup({ tmpDir, dbPath, sampleTs, fooCpp, fooH, hierarchyH });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
 async function testHandlersAndBuildState(): Promise<void> {
-  await withTempIndex(async ({ dbPath, sampleTs, fooCpp, fooH }) => {
+  await withTempIndex(async ({ dbPath, sampleTs, fooCpp, fooH, hierarchyH }) => {
     const session = await McpIndexSession.create({ db: dbPath });
-    const handlers = new McpToolHandlers(session);
+    const handlers = new McpToolHandlers(session, {
+      classHierarchyWorkerScript: false,
+      readClassHierarchyDefaultMaxNodes: async () => 2,
+    });
 
     const listed = handlers.listIndexes();
     assert.strictEqual(listed.isError, undefined);
@@ -151,6 +214,10 @@ async function testHandlersAndBuildState(): Promise<void> {
     assert.strictEqual(listPayload.indexes[0].partialIndex, false);
     assert.strictEqual(listPayload.indexes[0].buildState, 'complete');
     assert.deepStrictEqual(listPayload.warnings, []);
+    assert.ok(
+      !listed.content[0].text.includes('classHierarchyDefaultMaxNodes'),
+      'user settings must not be exposed through MCP results'
+    );
 
     const search = handlers.searchCode({ query: 'mcpUniqueSymbol', maxResults: 10 });
     assert.strictEqual(search.isError, undefined);
@@ -178,11 +245,134 @@ async function testHandlersAndBuildState(): Promise<void> {
     };
     assert.ok(pairPayload.results[0].counterparts.some((counterpart) => counterpart.path === fooH));
 
+    const defaultHierarchy = await handlers.searchClassHierarchy({
+      className: 'Root',
+    });
+    assert.strictEqual(defaultHierarchy.isError, undefined);
+    const defaultHierarchyPayload = JSON.parse(
+      defaultHierarchy.content[0].text
+    ) as {
+      totalNodeCount: number;
+      returnedNodeCount: number;
+      truncated: boolean;
+    };
+    assert.strictEqual(defaultHierarchyPayload.totalNodeCount, 4);
+    assert.strictEqual(defaultHierarchyPayload.returnedNodeCount, 2);
+    assert.strictEqual(defaultHierarchyPayload.truncated, true);
+
+    const allHierarchy = await handlers.searchClassHierarchy({
+      className: 'Root',
+      maxNodes: 'all',
+    });
+    assert.strictEqual(allHierarchy.isError, undefined);
+    const allHierarchyPayload = JSON.parse(allHierarchy.content[0].text) as {
+      rootId: string;
+      returnedNodeCount: number;
+      partialIndex: boolean;
+      nodes: Array<{
+        id: string;
+        name: string;
+        baseIds: string[];
+        path?: string;
+        localPath?: string;
+        line?: number;
+        endLine?: number;
+      }>;
+    };
+    assert.strictEqual(allHierarchyPayload.returnedNodeCount, 4);
+    assert.strictEqual(allHierarchyPayload.partialIndex, false);
+    const left = allHierarchyPayload.nodes.find((node) => node.name === 'Left');
+    const right = allHierarchyPayload.nodes.find((node) => node.name === 'Right');
+    const leaf = allHierarchyPayload.nodes.find((node) => node.name === 'Leaf');
+    assert.ok(left);
+    assert.ok(right);
+    assert.ok(leaf);
+    assert.deepStrictEqual(
+      new Set(leaf.baseIds),
+      new Set([left.id, right.id])
+    );
+    assert.strictEqual(leaf.path, hierarchyH);
+    assert.strictEqual(leaf.localPath, hierarchyH);
+    assert.ok((leaf.line ?? 0) <= (leaf.endLine ?? 0));
+
+    const ambiguous = await handlers.searchClassHierarchy({
+      className: 'Duplicate',
+      maxNodes: 'all',
+    });
+    assert.strictEqual(ambiguous.isError, true);
+    const ambiguousPayload = JSON.parse(ambiguous.content[0].text) as {
+      error: string;
+      candidates: Array<{ qualifiedName: string; localPath?: string }>;
+    };
+    assert.strictEqual(ambiguousPayload.error, 'ambiguous_class');
+    assert.deepStrictEqual(
+      ambiguousPayload.candidates.map((candidate) => candidate.qualifiedName),
+      ['One::Duplicate', 'Two::Duplicate']
+    );
+    assert.ok(
+      ambiguousPayload.candidates.every(
+        (candidate) => candidate.localPath === hierarchyH
+      )
+    );
+
+    const qualified = await handlers.searchClassHierarchy({
+      className: 'One::Duplicate',
+      maxNodes: 'all',
+    });
+    assert.strictEqual(qualified.isError, undefined);
+    const qualifiedPayload = JSON.parse(qualified.content[0].text) as {
+      nodes: Array<{ qualifiedName: string }>;
+    };
+    assert.ok(
+      qualifiedPayload.nodes.some(
+        (node) => node.qualifiedName === 'One::OneChild'
+      )
+    );
+
+    const external = await handlers.searchClassHierarchy({
+      className: 'MissingRoot',
+      maxNodes: 'all',
+    });
+    assert.strictEqual(external.isError, undefined);
+    const externalPayload = JSON.parse(external.content[0].text) as {
+      nodes: Array<{ name: string; external: boolean; path?: string }>;
+    };
+    assert.strictEqual(externalPayload.nodes[0].external, true);
+    assert.strictEqual(externalPayload.nodes[0].path, undefined);
+    assert.ok(externalPayload.nodes.some((node) => node.name === 'ExternalChild'));
+
+    const notFound = await handlers.searchClassHierarchy({
+      className: 'NoSuchClass',
+    });
+    assert.strictEqual(notFound.isError, true);
+    assert.strictEqual(
+      (JSON.parse(notFound.content[0].text) as { error: string }).error,
+      'not_found'
+    );
+    assert.strictEqual(
+      (await handlers.searchClassHierarchy({
+        className: 'Root',
+        maxNodes: 5001,
+      })).isError,
+      true
+    );
+
     // A read-only session observes durable state changes without reopening.
     const stateWriter = new IndexService(dbPath);
     await stateWriter.initialize([path.dirname(dbPath)]);
     const stateDb = stateWriter.getDatabase();
     assert.ok(stateDb);
+    const hierarchyTables = stateDb!
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name LIKE 'class_hierarchy_%'`
+      )
+      .all() as Array<{ name: string }>;
+    assert.deepStrictEqual(
+      hierarchyTables,
+      [],
+      'read-only MCP hierarchy fallback must not create cache tables'
+    );
     stateDb!
       .prepare('UPDATE meta SET value = ? WHERE key = ?')
       .run('building', INDEX_BUILD_STATE_META_KEY);
@@ -204,6 +394,7 @@ async function testHandlersAndBuildState(): Promise<void> {
     const again = await McpIndexSession.create({ db: dbPath });
     assert.strictEqual(again.listIndexes().length, 1);
     again.dispose();
+    await handlers.dispose();
     session.dispose();
   });
 }
@@ -267,7 +458,9 @@ async function testPathMappingOnSearchAndRead(): Promise<void> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'code-search-mcp-map-'));
   const dbPath = path.join(tmpDir, 'index.db');
   const sample = path.join(tmpDir, 'mapped.ts');
+  const mappedClass = path.join(tmpDir, 'MappedClass.h');
   fs.writeFileSync(sample, 'const mappedTokenXYZ = 99;\n');
+  fs.writeFileSync(mappedClass, 'class MappedClass {};\n');
 
   const index = new IndexService(dbPath);
   await index.initialize([tmpDir]);
@@ -299,7 +492,9 @@ async function testPathMappingOnSearchAndRead(): Promise<void> {
       registry: registryPath,
       workspaceRoots: [tmpDir],
     });
-    const handlers = new McpToolHandlers(session);
+    const handlers = new McpToolHandlers(session, {
+      classHierarchyWorkerScript: false,
+    });
     const search = handlers.searchCode({ query: 'mappedTokenXYZ' });
     assert.strictEqual(search.isError, undefined);
     const payload = JSON.parse(search.content[0].text) as {
@@ -317,6 +512,21 @@ async function testPathMappingOnSearchAndRead(): Promise<void> {
     };
     assert.strictEqual(readPayload.path, sample);
     assert.strictEqual(readPayload.localPath, payload.hits[0].localPath);
+    const hierarchy = await handlers.searchClassHierarchy({
+      className: 'MappedClass',
+      maxNodes: 'all',
+    });
+    assert.strictEqual(hierarchy.isError, undefined);
+    const hierarchyPayload = JSON.parse(hierarchy.content[0].text) as {
+      nodes: Array<{ path?: string; localPath?: string }>;
+    };
+    assert.strictEqual(hierarchyPayload.nodes[0].path, mappedClass);
+    assert.ok(
+      hierarchyPayload.nodes[0].localPath?.includes(
+        `${path.sep}virtual${path.sep}MappedClass.h`
+      )
+    );
+    await handlers.dispose();
     session.dispose();
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 ---
 name: ace-code-search-mcp
-description: Searches indexed source code through the read-only Ace Code Search MCP server, reads indexed file snapshots, lists indexes, and finds C/C++ header-source counterparts. Use automatically when locating code, symbols, text, files, or references in indexed workspaces, especially when the user asks to search code with Ace Code Search or MCP.
+description: Searches indexed source code and class hierarchies through the read-only Ace Code Search MCP server, reads indexed file snapshots, lists indexes, and finds C/C++ header-source counterparts. Use automatically when locating code, symbols, classes, text, files, or references in indexed workspaces, especially when the user asks to search code with Ace Code Search or MCP.
 ---
 
 # Ace Code Search MCP
@@ -15,6 +15,7 @@ The Skill alone does **not** expose tools. The agent session must have the Ace C
 - `search_code`
 - `read_indexed_file`
 - `find_header_source`
+- `search_class_hierarchy`
 
 If those tools are missing from the available tool list:
 
@@ -35,7 +36,8 @@ The Codex/Cursor launcher requires `node` on the client PATH and the packaged VS
 3. Call `search_code` with the narrowest useful query and options.
 4. If needed, call `read_indexed_file` with the returned `localPath` and a small line range.
 5. Use `find_header_source` for indexed C/C++ header/source pairing.
-6. State that results come from an index snapshot when freshness matters. `partialIndex: true` means the persisted build state is incomplete, failed, or unknown.
+6. Use `search_class_hierarchy` for a class's indexed descendant inheritance DAG and declaration locations.
+7. State that results come from an index snapshot when freshness matters. `partialIndex: true` means the persisted build state is incomplete, failed, or unknown.
 
 By default the server exposes only indexes whose mapped output roots are fully contained by the MCP client workspace roots. Standard `file://` roots plus platform-absolute raw paths (Win32 drive/UNC and macOS/POSIX) are accepted for client compatibility. Once a client advertises roots, an empty, invalid, or failed roots response is authoritative empty scope; only clients without roots capability use `--workspace-root` / process cwd fallback. Every IDE instance keeps an independent stdio session, index scope, and tool responses; cross-process aggregation is status-display only. Parent or mixed-workspace indexes fail closed. `--all-indexes` is an explicit server-launch opt-in for intentional cross-workspace access.
 
@@ -92,6 +94,16 @@ Pass `path`, preferably the returned `localPath`, plus optional `indexId`, `star
 ### `find_header_source`
 
 Pass a `.h`, `.hpp`, `.c`, `.cc`, `.cpp`, or related path and optional `indexId`. It only returns counterparts present in the index; there is no filesystem fallback.
+
+### `search_class_hierarchy`
+
+Pass `className` and optional `indexId`. Matching is case-sensitive. Use a qualified name such as `Game::Pawn` when a short name is ambiguous; an ambiguity error returns candidates and their indexed locations.
+
+The result is a flat descendant DAG rooted at `rootId`. Each node carries `baseIds`, `derivedIds`, and an indexed `path` plus mapped `localPath` and declaration range when source is available. Missing base declarations can appear as external roots without their own location.
+
+`maxNodes` accepts an integer from 1 to 5000 or `"all"`. When omitted, the user setting applies (20 by default). Prefer a bounded value first; request `"all"` only when the complete hierarchy is needed because large Unreal Engine graphs can produce very large MCP responses.
+
+Hierarchy cache rows are reused when current. Missing or stale cache entries are parsed from indexed file snapshots in memory without writing the database.
 
 ## Reporting
 

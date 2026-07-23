@@ -19,7 +19,8 @@ export type McpToolName =
   | 'list_indexes'
   | 'search_code'
   | 'read_indexed_file'
-  | 'find_header_source';
+  | 'find_header_source'
+  | 'search_class_hierarchy';
 
 export interface McpRuntimeRequest {
   id: string;
@@ -136,6 +137,12 @@ export function summarizeMcpRequest(tool: McpToolName, args: unknown): string {
       const file = safeBaseName(record?.path);
       return file ? `正在查找配对文件 ${file}` : '正在查找头文件/源文件配对';
     }
+    case 'search_class_hierarchy': {
+      const className = sanitizeSummaryText(record?.className);
+      return className
+        ? `正在查找类层次 “${className}”`
+        : '正在查找类层次';
+    }
     case 'list_indexes':
       return '正在获取索引';
   }
@@ -152,7 +159,13 @@ function requestFromUnknown(
   const tool = record.tool;
   if (
     typeof record.id !== 'string' ||
-    !['list_indexes', 'search_code', 'read_indexed_file', 'find_header_source'].includes(
+    ![
+      'list_indexes',
+      'search_code',
+      'read_indexed_file',
+      'find_header_source',
+      'search_class_hierarchy',
+    ].includes(
       String(tool)
     ) ||
     typeof record.summary !== 'string' ||

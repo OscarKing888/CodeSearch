@@ -2,7 +2,7 @@
   "name": "ace-code-search",
   "displayName": "Ace Code Search",
   "description": "Full-text code search with SQLite FTS5 indexing and instant results",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "publisher": "OscarKing888",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -330,6 +330,14 @@
           "default": false,
           "description": "Write per-search performance profile logs to profile-logs (latest-profile.jsonl)."
         },
+        "codeSearch.mcpClassHierarchyDefaultMaxNodes": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 0,
+          "maximum": 5000,
+          "scope": "application",
+          "description": "Default maximum nodes returned by MCP Class Hierarchy queries. Use 0 to return all nodes; an MCP maxNodes argument overrides this value."
+        },
         "codeSearch.indexThreads": {
           "type": "number",
           "default": 0,
@@ -405,7 +413,7 @@
     "version:bump": "node scripts/bump-version.js",
     "package": "vsce package --allow-missing-repository --baseContentUrl https://github.com/OscarKing888/CodeSearch --baseImagesUrl https://github.com/OscarKing888/CodeSearch/raw/main",
     "test:native": "npm run build && npm run rebuild:node && npx ts-node test/nativeExtensionRoot.test.ts && npx ts-node test/nativeArtifactScripts.test.ts && npx ts-node test/nativeVsixValidator.test.ts && npx ts-node test/nativeCliSmoke.test.ts",
-    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/indexingSettings.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/indexCatalog.test.ts && npx ts-node test/sharedIndexStorage.test.ts && npx ts-node test/workspaceIndexBinding.test.ts && npx ts-node test/workspaceOperationGuard.test.ts && npx ts-node test/indexWriterLease.test.ts && npx ts-node test/indexDiscovery.test.ts && npx ts-node test/indexRegistry.test.ts && npx ts-node test/indexPresence.test.ts && npx ts-node test/startupPrimarySelection.test.ts && npx ts-node test/indexManager.test.ts && npx ts-node test/indexServiceDispose.test.ts && npx ts-node test/indexServiceRecovery.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts && npx ts-node test/classHierarchy.test.ts && npx ts-node test/classHierarchyCacheStore.test.ts && npx ts-node test/classHierarchyWorkerPool.test.ts && npx ts-node test/classHierarchyTreeState.test.ts && npx ts-node test/classHierarchyCacheManager.test.ts && npx ts-node test/mcpTools.test.ts && npx ts-node test/mcpStatus.test.ts && npx ts-node test/mcpConfigInstaller.test.ts && npx ts-node test/agentSkillInstaller.test.ts && npx ts-node test/agentRuleInstaller.test.ts && npx ts-node test/vscodeMcpProvider.test.ts",
+    "test": "npx ts-node test/queryParser.test.ts && npx ts-node test/excludePatterns.test.ts && npx ts-node test/indexingSettings.test.ts && npx ts-node test/concurrency.test.ts && npx ts-node test/fileScanner.test.ts && npx ts-node test/fileWatcher.test.ts && npx ts-node test/indexCatalog.test.ts && npx ts-node test/sharedIndexStorage.test.ts && npx ts-node test/workspaceIndexBinding.test.ts && npx ts-node test/workspaceOperationGuard.test.ts && npx ts-node test/indexWriterLease.test.ts && npx ts-node test/indexDiscovery.test.ts && npx ts-node test/indexRegistry.test.ts && npx ts-node test/indexPresence.test.ts && npx ts-node test/startupPrimarySelection.test.ts && npx ts-node test/indexManager.test.ts && npx ts-node test/indexServiceDispose.test.ts && npx ts-node test/indexServiceRecovery.test.ts && npx ts-node test/searchStreamBuffer.test.ts && npx ts-node test/resultsPartialAckController.test.ts && npx ts-node test/searchProfileContext.test.ts && npx ts-node test/searchProfilePersistence.test.ts && npx ts-node test/purgeStaleEntries.test.ts && npx ts-node test/headerSourcePairing.test.ts && npx ts-node test/migrateHeaderSourceKeybindings.test.ts && npx ts-node test/tokenSuggestions.test.ts && npx ts-node test/indexDisplayTitle.test.ts && npx ts-node test/classHierarchy.test.ts && npx ts-node test/classHierarchyQuery.test.ts && npx ts-node test/classHierarchyCacheStore.test.ts && npx ts-node test/classHierarchyWorkerPool.test.ts && npx ts-node test/classHierarchyTreeState.test.ts && npx ts-node test/classHierarchyCacheManager.test.ts && npx ts-node test/readonlyClassHierarchyLoader.test.ts && npx ts-node test/mcpTools.test.ts && npx ts-node test/mcpSettings.test.ts && npx ts-node test/mcpStatus.test.ts && npx ts-node test/mcpConfigInstaller.test.ts && npx ts-node test/agentSkillInstaller.test.ts && npx ts-node test/agentRuleInstaller.test.ts && npx ts-node test/vscodeMcpProvider.test.ts",
     "test:purge": "npx ts-node test/purgeStaleEntries.test.ts",
     "cli": "node dist/cli.js",
     "mcp": "node dist/mcp.js"

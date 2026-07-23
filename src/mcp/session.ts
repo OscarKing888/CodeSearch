@@ -28,11 +28,13 @@ export interface OpenedIndex {
   searcher: SearchService;
 }
 
-function applyDirectoryMapping(
+export function applyDirectoryMapping(
   filePath: string,
   mappings: readonly DirectoryMapping[],
-  reverse: boolean
+  reverse: boolean,
+  platform: NodeJS.Platform = process.platform
 ): string {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
   const normalized = filePath.replace(/\\/g, '/');
   for (const mapping of mappings) {
     const sourceValue = reverse ? mapping.to : mapping.from;
@@ -44,17 +46,17 @@ function applyDirectoryMapping(
     if (!source) {
       continue;
     }
-    const pathKey = pathComparisonKey(normalized);
-    const sourceKey = pathComparisonKey(source);
+    const pathKey = pathComparisonKey(normalized, platform);
+    const sourceKey = pathComparisonKey(source, platform);
     const sourcePrefix = sourceKey.endsWith('/') ? sourceKey : `${sourceKey}/`;
     if (pathKey !== sourceKey && !pathKey.startsWith(sourcePrefix)) {
       continue;
     }
     const suffix = normalized.slice(source.length).replace(/^\//, '');
-    const localTarget = targetValue.replace(/\\|\//g, path.sep);
+    const localTarget = targetValue.replace(/\\|\//g, pathApi.sep);
     return suffix
-      ? path.join(localTarget, suffix.replace(/\//g, path.sep))
-      : path.normalize(localTarget);
+      ? pathApi.join(localTarget, suffix.replace(/\//g, pathApi.sep))
+      : pathApi.normalize(localTarget);
   }
   return filePath;
 }
@@ -65,7 +67,10 @@ export class McpIndexSession {
   private warnings: string[] = [];
   private workspaceRoots: string[] = [];
 
-  private constructor(private options: McpCliOptions) {}
+  private constructor(
+    private options: McpCliOptions,
+    private readonly extensionRoot: string
+  ) {}
 
   static async create(options: McpCliOptions): Promise<McpIndexSession> {
     // Always pin nativeBinding for MCP: VSIX omits node_modules/better-sqlite3/build,
@@ -73,7 +78,7 @@ export class McpIndexSession {
     const extensionRoot = options.extensionRoot ?? resolveExtensionRoot(__dirname);
     configureBetterSqlite3(extensionRoot);
 
-    const session = new McpIndexSession({ ...options });
+    const session = new McpIndexSession({ ...options }, extensionRoot);
     await session.reload();
     return session;
   }
@@ -186,6 +191,10 @@ export class McpIndexSession {
 
   getWorkspaceRoots(): string[] {
     return [...this.workspaceRoots];
+  }
+
+  getExtensionRoot(): string {
+    return this.extensionRoot;
   }
 
   listIndexes(): Array<{

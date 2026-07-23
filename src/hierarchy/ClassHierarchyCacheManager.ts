@@ -6,17 +6,16 @@ import { ClassHierarchyModel } from './ClassHierarchyModel';
 import {
   ClassDeclaration,
   buildClassHierarchy,
-  extractClassDeclarations,
 } from './classHierarchy';
 import {
   ClassHierarchyCacheStore,
-  ClassHierarchySourceSnapshot,
   ParsedClassHierarchyFile,
 } from './classHierarchyCacheStore';
 import {
-  ClassHierarchyWorkerPool,
-  shouldFallbackFromClassHierarchyWorker,
-} from './ClassHierarchyWorkerPool';
+  ClassHierarchySourceParser,
+  throwIfAborted,
+  yieldToEventLoop,
+} from './ClassHierarchySourceParser';
 
 const CACHE_PAGE_SIZE = 16;
 const CACHE_APPLY_BATCH_SIZE = 16;
@@ -26,11 +25,6 @@ interface ReadonlyFallback {
   declarations: ClassDeclaration[];
   parsedFileCount: number;
   complete: boolean;
-}
-
-interface ParsePageResult {
-  files: ParsedClassHierarchyFile[];
-  failedFileCount: number;
 }
 
 interface ServiceDeclarations {
@@ -47,11 +41,10 @@ interface ServiceDeclarations {
 export class ClassHierarchyCacheManager extends EventEmitter {
   private readonly stores = new WeakMap<IndexService, ClassHierarchyCacheStore>();
   private readonly readonlyFallbacks = new Map<string, ReadonlyFallback>();
-  private readonly workerPool: ClassHierarchyWorkerPool;
+  private readonly sourceParser: ClassHierarchySourceParser;
   private syncPromise: Promise<boolean> | undefined;
   private backgroundTimer: ReturnType<typeof setTimeout> | undefined;
   private cachedModel: ClassHierarchyModel | undefined;
-  private useWorkers = true;
   private disposed = false;
   private modelGeneration = 0;
   private modelDirty = false;
@@ -73,7 +66,11 @@ export class ClassHierarchyCacheManager extends EventEmitter {
     workerScript: string
   ) {
     super();
-    this.workerPool = new ClassHierarchyWorkerPool({ workerScript, batchSize: 8 });
+    this.sourceParser = new ClassHierarchySourceParser({
+      workerScript,
+      workerBatchSize: 8,
+      warn: (message, error) => this.warn(message, error),
+    });
   }
 
   start(): void {
@@ -96,7 +93,7 @@ export class ClassHierarchyCacheManager extends EventEmitter {
       clearTimeout(this.backgroundTimer);
       this.backgroundTimer = undefined;
     }
-    await this.workerPool.terminate();
+    await this.sourceParser.dispose();
     try {
       await this.syncPromise;
     } catch {
@@ -237,7 +234,7 @@ export class ClassHierarchyCacheManager extends EventEmitter {
           limit: CACHE_PAGE_SIZE,
         });
         if (page.sources.length > 0) {
-          const parsed = await this.parsePage(page.sources);
+          const parsed = await this.sourceParser.parsePage(page.sources);
           for (const file of parsed.files) {
             parsedFiles.push(file);
           }
@@ -332,7 +329,7 @@ export class ClassHierarchyCacheManager extends EventEmitter {
         afterFileId,
         limit: CACHE_PAGE_SIZE,
       });
-      const parsed = await this.parsePage(page.sources, signal);
+      const parsed = await this.sourceParser.parsePage(page.sources, signal);
       for (const file of parsed.files) {
         for (const declaration of file.declarations) {
           declarations.push(declaration);
@@ -347,70 +344,6 @@ export class ClassHierarchyCacheManager extends EventEmitter {
       await yieldToEventLoop();
     }
     return { declarations, parsedFileCount, complete: complete && !this.disposed };
-  }
-
-  private async parsePage(
-    sources: readonly ClassHierarchySourceSnapshot[],
-    signal?: AbortSignal
-  ): Promise<ParsePageResult> {
-    if (sources.length === 0) {
-      return { files: [], failedFileCount: 0 };
-    }
-    if (this.useWorkers) {
-      try {
-        const results = await this.workerPool.parseFiles(sources.map((source) => ({
-          path: source.path,
-          mtime: source.mtime,
-          size: source.size,
-          content: source.content,
-        })), signal);
-        const files: ParsedClassHierarchyFile[] = [];
-        let failedFileCount = 0;
-        results.forEach((result, index) => {
-          const source = sources[index];
-          if (!source || !result.ok || result.path !== source.path ||
-              result.mtime !== source.mtime || result.size !== source.size) {
-            failedFileCount++;
-            return;
-          }
-          files.push({
-            fileId: source.fileId,
-            path: source.path,
-            mtime: source.mtime,
-            size: source.size,
-            fingerprint: source.fingerprint,
-            declarations: result.declarations,
-          });
-        });
-        return { files, failedFileCount };
-      } catch (error) {
-        if (!shouldFallbackFromClassHierarchyWorker(error)) {
-          throw error;
-        }
-        this.useWorkers = false;
-        this.warn('class parser worker unavailable; using the event-loop fallback', error);
-      }
-    }
-
-    const files: ParsedClassHierarchyFile[] = [];
-    let failedFileCount = 0;
-    for (const source of sources) {
-      throwIfAborted(signal);
-      try {
-        files.push({
-          fileId: source.fileId,
-          path: source.path,
-          mtime: source.mtime,
-          size: source.size,
-          fingerprint: source.fingerprint,
-          declarations: extractClassDeclarations(source.content, source.path),
-        });
-      } catch {
-        failedFileCount++;
-      }
-    }
-    await yieldToEventLoop();
-    return { files, failedFileCount };
   }
 
   private getStore(
@@ -497,14 +430,4 @@ function mapAndDeduplicateDeclarations(
     });
   }
   return [...unique.values()];
-}
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw new Error('Class hierarchy build cancelled');
-  }
 }

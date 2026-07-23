@@ -52,6 +52,13 @@ function testSummaries(): void {
     summarizeMcpRequest('find_header_source', { path: '/private/tree/Widget.cpp' }),
     '正在查找配对文件 Widget.cpp'
   );
+  const hierarchy = summarizeMcpRequest('search_class_hierarchy', {
+    className: '  Game::Secret\nPawn\u0000 ',
+    indexId: 'secret-index',
+    maxNodes: 'all',
+  });
+  assert.strictEqual(hierarchy, '正在查找类层次 “Game::Secret Pawn”');
+  assert.ok(!hierarchy.includes('secret-index'));
   assert.ok(summarizeMcpRequest('search_code', { query: 'x'.repeat(200) }).length < 90);
 }
 
