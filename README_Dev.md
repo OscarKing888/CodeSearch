@@ -1,3 +1,7 @@
+[中文](https://github.com/OscarKing888/CodeSearch/blob/main/README_Dev.md) | [English](https://github.com/OscarKing888/CodeSearch/blob/main/README_Dev_en.md)
+
+用户向说明见 https://github.com/OscarKing888/CodeSearch/blob/main/README.md（中文）与 https://github.com/OscarKing888/CodeSearch/blob/main/README_en.md（English）。
+
 ## Development
 
 ### Windows
@@ -47,6 +51,40 @@ npm run mcp
 npm run mcp -- --all-indexes
 ```
 
+#### MCP 工具
+
+| 工具 | 用途 |
+| --- | --- |
+| `list_indexes` | 列出自动发现或显式配置的索引、根目录、token 数与完整状态 |
+| `search_code` | 全文搜索，支持索引选择、大小写、短语、模糊、松散匹配及查询过滤器 |
+| `read_indexed_file` | 按行范围读取索引中的文件快照 |
+| `find_header_source` | 使用索引查找 C/C++ 头文件/源文件配对 |
+| `search_class_hierarchy` | 返回指定类的子类继承 DAG 与代码位置 |
+
+`search_code` 主要参数：`caseSensitive`、`phraseSearch`、`fuzzy`、`loose` + `looseGap`、`contextLines`、`maxResults`；查询语法支持 `ext:`、`file:`、`dir:`、`age:`、`+/-` 内容过滤及 `*` 通配符。无独立严格 `wholeWord` 参数；含连字符等标点的名称可按 tokenizer 拆词搜索（如 `better sqlite3` 搜 `better-sqlite3`）。
+
+`search_class_hierarchy` 大小写敏感；限定名唯一定位，同名短类名返回候选。`maxNodes` 为 1–5000 或 `"all"`，省略时读用户设置 `codeSearch.mcpClassHierarchyDefaultMaxNodes`（默认 20，0 表示全部）。MCP 只读，不写数据库或 registry；Primary/Secondary 与 writer lease 为编辑器侧操作。
+
+#### 索引发现与只读保证
+
+- 无参数启动时容错发现 VS Code/Cursor registry；损坏来源出现在 `list_indexes.warnings`
+- 默认只暴露 MCP client roots 完全包含的索引；声明 roots 后空/无效 roots 清空作用域，不回退 cwd
+- 显式 `--registry` 或 `--db`；多索引可见时必须传 `indexId`；跨工作区需 `--all-indexes`
+- 结果来自**索引快照**；构建状态非 `complete` 时返回 `partialIndex: true`
+
+#### Agent 集成与用户状态
+
+命令 **Ace Code Search: Install Agent Integration (Project Guidance + User MCP)**（工具栏文档图标）写入：
+
+- 项目 Skill：`.agents/skills/ace-code-search-mcp/SKILL.md`
+- 用户启动器：`~/.ace-code-search/mcp-launcher.cjs`
+- Codex / Cursor 配置：`~/.codex/config.toml`、`~/.cursor/mcp.json`
+- 支持的 VS Code 通过 `ace-code-search.mcp-servers` 动态发现
+
+Skill 仅提供用法；**未注册 MCP Server 时不会出现工具**。Codex/Cursor 需 PATH 中有 `node`（VSIX 内置 Node 20/22/24 绑定）；VS Code Provider 使用编辑器运行时。项目指导只保留在 `.agents`，普通安装不创建 `.codex`、`.github`、`.cursor`、`.claude` 项目文件。
+
+搜索面板状态栏：灰色 **Waiting**、绿色 **Ready**、黄色显示脱敏动作摘要（如 `正在搜索 “xxx”`）。多 IDE 进程按工作区聚合显示，各 stdio 会话独立。Skill 建议有索引时优先 MCP，无索引/不完整/未入库时回退 `rg`/读文件。
+
 Tools: `list_indexes`, `search_code`, `read_indexed_file`, `find_header_source`, `search_class_hierarchy`.
 Results come from the **index snapshot**, not a live filesystem walk. Automatic discovery tolerates broken registries/databases and reports them through `list_indexes.warnings`; explicit `--db` and `--registry` sources remain strict. A missing legacy build-state marker is `unknown`, and every state other than `complete` returns `partialIndex: true`.
 
@@ -58,24 +96,15 @@ Codex/Cursor launchers and direct CLI/MCP runs use the system-Node binaries unde
 
 Workspace Primary/Secondary selection, `workspaceIndexBindingV2`, shared-index creation, and `<index.db>.writer.lock` are intentionally excluded from MCP: they mutate editor state or writer ownership. MCP still discovers per-editor registries (including shared/manual DB paths after an IDE registers them), supports explicit `--db`, opens databases read-only, and never acquires the writer lease.
 
-#### Agent integration installation
+#### Agent integration installation（实现细节）
 
-The search toolbar document-check button (command **Ace Code Search: Install Agent Integration (Project Guidance + User MCP)**) installs:
+安装行为见上文 **Agent 集成与用户状态**。实现要点：
 
-- Canonical full Skill: `{workspace}/.agents/skills/ace-code-search-mcp/SKILL.md`
-- Stable user launcher: `~/.ace-code-search/mcp-launcher.cjs`
-- User MCP configs: `~/.codex/config.toml` and `~/.cursor/mcp.json`
-- A dynamic VS Code MCP provider (`ace-code-search.mcp-servers`) when that API is available
-
-The launcher discovers the newest installed Ace Code Search extension each time it starts, so client config does not retain a versioned extension path. Skill files alone do not expose MCP tools; after installation, restart Codex or run `/mcp`.
-
-Codex/Cursor launcher configs invoke `node` from the client PATH; the published VSIX guarantees native bindings for Node.js 20, 22, and 24. VS Code's dynamic provider uses the editor runtime, so it does not depend on a separate PATH Node.
-
-The full project Skill exists only in `.agents`, which current Codex, VS Code/Copilot, and Cursor discover natively. Do not recreate project guidance under `.github`, `.cursor`, or `.claude`. The deprecated `codeSearch.installVscodeCopilotInstruction` command ID is retained only as an alias to the canonical installer and never writes `.github/instructions`. The personal Cursor User Rule copy helper remains optional.
-
-Managed files use owner/kind/content-hash markers and atomic replacement. TOML blocks and recognized legacy Cursor JSON entries migrate only when their exact managed shape is known. Invalid markers, malformed configs, custom entries, and user-modified files are preserved with warnings. Legacy project `.codex`, `.cursor/skills`, `.cursor/rules`, `.claude/skills`, and `.github/instructions` entries are removed only when their managed content can be verified.
-
-The packaged Skill source `resources/skills/ace-code-search-mcp/SKILL.md` must stay byte-identical to `.agents/skills/ace-code-search-mcp/SKILL.md`.
+- Launcher 每次启动发现最新已安装扩展，配置不绑定版本路径
+- 托管文件用 owner/kind/content-hash marker；用户修改或无效 marker 保留并警告
+- 可验证的 legacy 项目 `.codex`、`.cursor/skills`、`.cursor/rules`、`.claude/skills`、`.github/instructions` 会迁移/清理
+- `resources/skills/ace-code-search-mcp/SKILL.md` 必须与 `.agents/skills/ace-code-search-mcp/SKILL.md` 字节一致
+- `codeSearch.installVscodeCopilotInstruction` 仅为 canonical installer 别名
 
 #### MCP runtime status
 
@@ -227,11 +256,33 @@ See VS Code Settings → **Ace Code Search** for exclude globs, context lines, p
 - **Multi-tab results**: `Ctrl+Enter` new tab, lock tabs with 🔒, close with ×
 - **Shared Primary**: new non-autocreate workspaces use one deterministic DB path shared by VS Code and Cursor; `Ace Code Search: Choose Workspace Primary Index...` also supports an auto-discovered candidate or manually selected `index.db`
 - **Secondary indexes**: `Ace Code Search: Open Secondary Index` opens a discovered or manually selected DB read-only by default; writable mode requires known source roots and the writer lease
-- **Index management**: toolbar ⚙ or `Ace Code Search: Manage Indexes` opens a dedicated editor tab with a compact workspace context, a dominant Primary, subordinate Secondary rows, a lower-priority Available list, and one selected-index inspector. The inspector separates **Index content** (read-only roots, inherited/global rules, Additional exclusions) from **This workspace** (role, access/writer state, directory mappings). Available **Delete** confirms the exact path and removes the DB plus WAL/SHM sidecars through the manager's cross-process safety checks. Native dialogs own DB/root selection; the UI must not render fake root editing or access-mode controls that the backend cannot commit.
+- **Index management**: toolbar ⚙ or `Ace Code Search: Manage Indexes` — see **跨 IDE 索引（用户指南）** below for panel layout and delete behavior
 - **Autocreate**: add `code-search.autocreate` in workspace root (optional JSON config)
 - **Directory mapping**: map `\\server\share => C:\local` for shared indexes
-- **CLI**: `npm run cli -- create|update|list` (see [PHASE2.md](PHASE2.md))
+- **CLI**: `npm run cli -- create|update|list` (see https://github.com/OscarKing888/CodeSearch/blob/main/PHASE2.md)
 - **MCP**: `npm run mcp` — read-only stdio tools for AI agents (see Development → MCP above)
+
+### 跨 IDE 索引（用户指南）
+
+同一台机器上 VS Code 与 Cursor 打开相同目录或 workspace 时，新建工作区索引默认使用同一份、与 IDE 无关的 Primary 数据库。打开 **Manage Indexes** 可查看 workspace 根目录、Primary 来源、读写模式与共享数据库路径。
+
+- **共享 Primary**：**Use Shared Index** 或 **Ace Code Search: Choose Workspace Primary Index...**；选择器也列出从 VS Code/Cursor registry 自动发现的同 workspace 索引
+- **手动 Primary**：选择任意已有 `index.db`；已有库推荐只读，或选 **Automatic single-writer**
+- **单写者保护**：自动模式通过 `<index.db>.writer.lock` 只允许一个 IDE 写入；另一 IDE 只读搜索并在管理页显示当前写入者；写入方关闭后 reader 空闲时自动接管写权限
+- **崩溃恢复**：进程已失效的 writer lock 自动回收；malformed `.writer.lock` 或残留 `.writer.lock.reclaim` 需关闭所有使用该索引的 IDE 后手动删除，扩展不会自动删以免双写
+- **Secondary**：**Open Secondary...** 打开自动发现或手动库；默认只读，已知源目录时可用自动单写者；已打开 Secondary 参与每次搜索
+- **安全只读**：只读索引不扫描、不 watcher、不迁移 schema、不写库；无效库切换前报错，原 Primary 保持可用
+- **属性层级**：Primary 为主、Secondary 从属；`Index content` 与 `This workspace` 分开；Unreal 默认排除只读展示，Additional exclusions 单独编辑
+- **删除 Available 索引**：**Delete** 显示完整路径并二次确认，永久删除 DB 及 WAL/SHM；使用中或被锁定的索引拒绝删除
+- **兼容旧索引**：原 `globalStorage` 索引不自动搬移，以 Legacy 继续打开；`code-search.autocreate` 仍优先
+
+共享数据库位置：
+
+- Windows：`%LOCALAPPDATA%\AceCodeSearch\indexes\<workspace-key>\index.db`
+- macOS：`~/Library/Application Support/AceCodeSearch/indexes/<workspace-key>/index.db`
+- Linux：`${XDG_DATA_HOME:-~/.local/share}/AceCodeSearch/indexes/<workspace-key>/index.db`
+
+`workspace-key` 由规范化并排序后的 workspace 根目录生成。
 
 ### Cross-IDE Primary binding and compatibility
 
@@ -278,9 +329,64 @@ npm run build
 
 Manual smoke test: open the same workspace in VS Code and Cursor, select the shared Primary in both, and confirm one shows writable while the other names that writer and remains read-only. Then verify manual Primary selection survives reload, Secondary attachments restore, missing/non-Ace DBs fail without replacing the working Primary, and an autocreate workspace disables panel Primary changes.
 
+### 大型工作区性能
+
+针对 Unreal Engine 等大型代码库（实测 UE 5.61），0.4.x 起重点解决「索引已 **Up to date** 但扩展宿主仍高 CPU、搜索体感卡顿」。实机 profile：暖索引下 `AActor` 类 FTS 查询约 **200ms** 可达 1 万条结果，瓶颈多在扩展宿主内的文件监听与 UI 推送，而非 SQLite 本身。算法细节见下文 **索引与搜索算法**。
+
+**文件监听**
+
+- VS Code/Cursor 使用编辑器原生 `FileSystemWatcher`，递归监听在文件服务进程执行
+- CLI 保留 chokidar fallback
+- include/exclude matcher 只编译一次；搜索期间暂停索引更新，结束后分批排空
+- 监听器就绪后才显示 **Up to date**
+
+**流式搜索与结果面板**
+
+- FTS 游标化边读边推：首批 **50** 条、后续每批 **500** 条
+- Extension 按 **100** 行分块推送 webview 并等待 ACK
+- Webview 首批轻量纯文本，后续经 `requestAnimationFrame` 合并 DOM
+- **Updating** 显示「已载入 / 已发现」，避免命中数被误解为已全部渲染
+
+**诊断日志（可选）**
+
+- `codeSearch.profileSearch` 默认关闭；开启后搜索写入 JSONL，250ms checkpoint
+- `codeSearch.openProfileLogFolder` 打开日志目录；`latest-profile.jsonl` 指向最新一轮
+
+实机目标（索引完成后）：`AActor` 首批 ≤500ms，1 万条 ≤5s，空闲后扩展宿主 CPU 快速回落。
+
+## 功能状态一览
+
+✅ 已完成 · 🟡 部分实现 · ⬜ 待实现
+
+| 类别 | 功能 | 状态 |
+|------|------|------|
+| **索引** | 工作区全文索引 / autocreate 指定根 | ✅ |
+| | VS Code/Cursor 共用 Primary、手动 Primary、单写者 | ✅ |
+| | 多根 / Secondary / 目录映射 | ✅ |
+| | 增量更新（编辑器原生监听；CLI chokidar） | ✅ |
+| | 低优先级后台节流（Be extra nice） | ⬜ |
+| | 二进制排除 / excludeGlobs / Unreal 默认排除 | ✅ |
+| | 自动 `.gitignore` | ⬜ |
+| | 每索引 include/exclude | 🟡 exclude 有 Advanced UI |
+| | 状态 Scanning / Indexing / Up to date | ✅ |
+| | 部分索引即可搜索 / 强制刷新 | ✅ |
+| | changed-only / all-files 分模式刷新 | ⬜ |
+| | 索引管理面板（Primary / Secondary / Delete） | ✅ |
+| | Ace Code Search CLI | ✅ |
+| **AI Agent** | 只读 MCP（搜索 / 读文件 / 类层次 / 头源配对） | ✅ |
+| | Skill 与 MCP 状态栏 | ✅ |
+| **搜索** | 单词 / 短语 / 模糊 / Loose / 通配符 / 仅过滤 | ✅ |
+| | 大小写 / 短语默认 / 上下文行 | ✅ |
+| **过滤** | `ext:` / `file:` / `dir:` / `age:` / `+/-` | ✅ |
+| **结果 UI** | 底部面板 / 多标签 / 锁定 / 排序 / 自动补全 | ✅ |
+| | 语法高亮 | 🟡 规则高亮 |
+| | C++ 类继承树 | ✅ |
+| **导航** | Alt+= 搜索选区 / 命中跳转 / Shift+Alt+F | ✅ |
+| | Alt+O 头源切换 / 唯一命中自动打开 | ✅ |
+
 ## Roadmap
 
-See [PHASE2.md](PHASE2.md) — Phase 2 & 3 complete.
+See https://github.com/OscarKing888/CodeSearch/blob/main/PHASE2.md — Phase 2 & 3 complete.
 
 ---
 
@@ -457,13 +563,22 @@ CREATE TABLE tokens (
 | `codeSearch.quickOpenFile` | `Shift+Alt+F` | 文件过滤模式 |
 | `codeSearch.nextHit` | `Ctrl+Alt+]` | 下一命中（面板内聚焦时） |
 | `codeSearch.prevHit` | `Ctrl+Alt+[` | 上一命中（面板内聚焦时） |
-| `codeSearch.switchHeaderSource` | `Alt+O` | 在索引中查找并切换头/源文件（C/C++ 扩展名） |
+| `codeSearch.switchHeaderSource` | `Alt+O` | 在索引中切换头/源（C/C++）；配对须已在索引 `files` 表中；优先级：同目录 stem → UE Public↔Private → 路径最近；启动时自动迁移用户 Alt+O 旧绑定并劫持 `C_Cpp.SwitchHeaderSource` / `clangd.switchheadersource` |
 | `codeSearch.refreshIndex` | — | 强制重建索引 |
 | `codeSearch.manageIndexes` | — | 打开 Workspace Primary / Secondary 管理页 |
 | `codeSearch.selectPrimaryIndex` | — | 选择共享、自动发现或手动 `index.db` 作为 Primary |
 | `codeSearch.openSecondaryIndex` | — | 打开只读或自动单写者 Secondary |
 | `codeSearch.createIndex` | — | 创建并打开一个可写 Secondary |
 | `codeSearch.openClassHierarchy` | — | 直接打开全部已索引 C++ class 的继承树 panel |
+
+### Class 继承树
+
+无需先搜索，点击搜索工具栏继承树图标，在新 panel 中查看已索引 C/C++ `class` / `struct` 继承关系；点击 class 名打开声明并定位行号。
+
+- 继承声明缓存在可写索引库中，源码变化后失效，搜索/索引空闲时由最多两个后台线程增量更新并集中写入
+- 只读旧索引兼容，缺失缓存时用内存回退解析，不写库
+- 支持 UE `MODULE_API`、namespace、多行声明、`final`、多继承、访问修饰符、virtual 基类；索引外基类以灰色外部节点显示
+- 超大图默认折叠，单次最多 5,000 树节点；过滤后清空过滤回到选中 class；右键可展开/折叠全部子类
 
 ### 配置项
 
@@ -573,6 +688,8 @@ tokenize='unicode61 remove_diacritics 0'
 | **Fuzzy 模糊** | FTS 结果不足时，对候选内容做编辑距离匹配（`FuzzyMatch.ts`） |
 | **行内/跨行通配符** | FTS 粗筛 + `WildcardMatcher` 在内容上做模式匹配 |
 | **仅过滤** | 无搜索词时直接查 `files` 表，按路径/扩展名过滤 |
+
+**流式推送与索引协同**（大型工作区详见 **大型工作区性能**）：搜索期间暂停文件监听与索引；结果首批 50 条快速上屏，后续分批推送并配合 webview ACK 背压；可配置 `codeSearch.indexThreads` 多线程读盘加快首次建库。
 
 ### 与 VS Code 内置搜索的对比
 
