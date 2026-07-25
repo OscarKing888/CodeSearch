@@ -27,7 +27,7 @@ If those tools are missing from the available tool list:
 
 The toolbar **Install Agent Integration (Project Guidance + User MCP)** command installs the sole project Skill under `.agents/skills` for Codex, VS Code/Copilot, and Cursor, plus Codex/Cursor user MCP entries that point to a stable launcher under `~/.ace-code-search/`. It does not create project guidance under `.codex`, `.github`, `.cursor`, or `.claude`.
 
-The Codex/Cursor launcher requires `node` on the client PATH and the packaged VSIX guarantees Node.js 20, 22, and 24 ABIs. VS Code's dynamic provider uses the editor runtime instead and does not require a separate PATH Node.
+The Codex/Cursor launcher starts with the client `node` command, but before loading MCP it re-execs to a compatible Node.js 20/22/24 runtime when the PATH Node ABI does not match the packaged `native-node/` binaries (for example Node 23 on Homebrew). It prefers `ACE_CODE_SEARCH_NODE`, then Cursor's helper Node when installed, then other PATH candidates. The packaged VSIX guarantees Node.js 20, 22, and 24 ABIs. VS Code's dynamic provider uses the editor runtime instead and does not require a separate PATH Node.
 
 ## Workflow
 

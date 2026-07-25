@@ -252,6 +252,18 @@ async function testInstallAndLauncher(): Promise<void> {
     mcpPath,
     'process.stdout.write(JSON.stringify({ argv: process.argv.slice(1) }));\n'
   );
+  const scriptsDir = path.join(extensionRoot, 'scripts');
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  for (const scriptName of ['mcp-node-resolver.js', 'native-matrix.js']) {
+    fs.copyFileSync(
+      path.join(__dirname, '..', 'scripts', scriptName),
+      path.join(scriptsDir, scriptName)
+    );
+  }
+  const nativeNodeTag = `${process.platform}-${process.arch}-${process.versions.modules}`;
+  const nativeNodeDir = path.join(extensionRoot, 'native-node', nativeNodeTag);
+  fs.mkdirSync(nativeNodeDir, { recursive: true });
+  fs.writeFileSync(path.join(nativeNodeDir, 'better_sqlite3.node'), Buffer.from([1]));
   const userCodexConfig = path.join(homeDir, '.codex', 'config.toml');
   fs.mkdirSync(path.dirname(userCodexConfig), { recursive: true });
   fs.writeFileSync(userCodexConfig, 'model = "gpt"\n', { mode: 0o600 });
@@ -413,6 +425,10 @@ async function main(): Promise<void> {
   testCodexMergeSafety();
   testCursorMergeSafety();
   assert.ok(buildMcpLauncher(process.cwd()).startsWith('// ACE-CODE-SEARCH-MCP-LAUNCHER'));
+  const launcherSource = buildMcpLauncher(process.cwd());
+  assert.ok(launcherSource.includes('resolveCompatibleMcpNode'));
+  assert.ok(launcherSource.includes('spawnSync'));
+  assert.ok(launcherSource.includes('mcp-node-resolver.js'));
   await testInstallAndLauncher();
   console.log('mcpConfigInstaller tests passed');
 }

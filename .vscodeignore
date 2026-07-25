@@ -26,8 +26,11 @@ install-extension.sh
 安装CodeSearch.bat
 *.vsix
 README_Dev.md
+README_Dev_en.md
 PHASE2.md
 scripts/**
+!scripts/mcp-node-resolver.js
+!scripts/native-matrix.js
 
 # better-sqlite3: ship native binary + JS loader only
 node_modules/better-sqlite3/build/**

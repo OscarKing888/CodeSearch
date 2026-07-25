@@ -39,10 +39,15 @@ function resolveNativeBinaryPath(root: string): string {
     }
 
     const availableNode = listAvailableNativeBinaries(path.join(root, 'native-node'));
+    const supportedAbis = new Set(['115', '127', '137']);
+    const mcpHint = supportedAbis.has(abi)
+      ? ''
+      : ' For MCP/Cursor/Codex, rerun Install Agent Integration so the launcher can re-exec to a compatible Node, or set ACE_CODE_SEARCH_NODE.';
     throw new Error(
       `No better_sqlite3 binary for Node ABI ${abi} (${tag}). ` +
         `Available Node builds: ${availableNode.join(', ') || 'none'}. ` +
-        'Run `npm run rebuild:node` (or build.sh) so native-node/ is populated, then reinstall the extension.'
+        'Run `npm run rebuild:node` (or build.sh) so native-node/ is populated, then reinstall the extension.' +
+        mcpHint
     );
   }
 

@@ -285,6 +285,21 @@ if (!selected) {
     'Ace Code Search MCP extension files were not found. Reinstall the extension, then rerun its Agent Integration command.'
   );
 }
+const { spawnSync } = require('child_process');
+const { resolveCompatibleMcpNode, executablePathKey } = require(
+  path.join(selected.root, 'scripts', 'mcp-node-resolver.js')
+);
+const compatibleNode = resolveCompatibleMcpNode(selected.root);
+if (executablePathKey(compatibleNode) !== executablePathKey(process.execPath)) {
+  const result = spawnSync(compatibleNode, process.argv, {
+    stdio: 'inherit',
+    env: process.env,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  process.exit(result.status == null ? 1 : result.status);
+}
 const entryPath = path.join(selected.root, 'dist', 'mcp.js');
 if (!process.argv.includes('--extension-root')) {
   process.argv.push('--extension-root', selected.root);
