@@ -1,6 +1,6 @@
 'use strict';
 
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { NATIVE_BINARY_NAME, NODE_RUNTIMES, nodeRuntimeForMajor } = require('./native-matrix');
@@ -39,6 +39,23 @@ function commandCandidatesFromPath(names) {
     }
   }
   return candidates;
+}
+
+function nodeCommandNames(platform = process.platform) {
+  const versioned = NODE_RUNTIMES.map((runtime) => `node${runtime.major}`);
+  return platform === 'win32'
+    ? ['node.exe', ...versioned.map((name) => `${name}.exe`), 'node', ...versioned]
+    : ['node', ...versioned];
+}
+
+function wellKnownNodeCandidates(platform = process.platform) {
+  if (platform !== 'darwin') {
+    return [];
+  }
+  return NODE_RUNTIMES.flatMap((runtime) => [
+    `/opt/homebrew/opt/node@${runtime.major}/bin/node`,
+    `/usr/local/opt/node@${runtime.major}/bin/node`,
+  ]);
 }
 
 function cursorCliCandidates() {
@@ -123,7 +140,8 @@ function collectNodeCandidates() {
     process.env.ACE_CODE_SEARCH_NODE,
     ...findCursorHelperNodes(),
     process.execPath,
-    ...commandCandidatesFromPath(process.platform === 'win32' ? ['node.exe', 'node'] : ['node']),
+    ...commandCandidatesFromPath(nodeCommandNames()),
+    ...wellKnownNodeCandidates(),
   ].filter(Boolean)) {
     try {
       if (!fs.statSync(executable).isFile()) continue;
@@ -171,12 +189,49 @@ function resolveCompatibleMcpNode(extensionRoot) {
   );
 }
 
+/**
+ * Re-launch the current MCP command under a compatible Node when necessary.
+ * Returning undefined means the current runtime is already usable.
+ *
+ * @param {string} extensionRoot
+ * @param {{
+ *   argv?: string[],
+ *   currentExecPath?: string,
+ *   compatibleNode?: string,
+ *   env?: NodeJS.ProcessEnv,
+ *   spawnSync?: typeof spawnSync,
+ * }} [options]
+ * @returns {number|undefined} child exit code when a re-launch occurred
+ */
+function relaunchWithCompatibleMcpNode(extensionRoot, options = {}) {
+  const currentExecPath = options.currentExecPath || process.execPath;
+  const compatibleNode =
+    options.compatibleNode || resolveCompatibleMcpNode(extensionRoot);
+  if (executablePathKey(compatibleNode) === executablePathKey(currentExecPath)) {
+    return undefined;
+  }
+
+  const argv = options.argv || process.argv;
+  const launch = options.spawnSync || spawnSync;
+  const result = launch(compatibleNode, argv.slice(1), {
+    stdio: 'inherit',
+    env: options.env || process.env,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return result.status == null ? 1 : result.status;
+}
+
 module.exports = {
   collectNodeCandidates,
   cursorHelperNodePath,
   findCursorHelperNodes,
   inspectNodeExecutable,
   listPackagedNodeTags,
+  nodeCommandNames,
+  relaunchWithCompatibleMcpNode,
   resolveCompatibleMcpNode,
+  wellKnownNodeCandidates,
   executablePathKey,
 };

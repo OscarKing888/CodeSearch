@@ -81,7 +81,7 @@ npm run mcp -- --all-indexes
 - Codex / Cursor 配置：`~/.codex/config.toml`、`~/.cursor/mcp.json`
 - 支持的 VS Code 通过 `ace-code-search.mcp-servers` 动态发现
 
-Skill 仅提供用法；**未注册 MCP Server 时不会出现工具**。Codex/Cursor 需 PATH 中有 `node`（VSIX 内置 Node 20/22/24 绑定）；VS Code Provider 使用编辑器运行时。项目指导只保留在 `.agents`，普通安装不创建 `.codex`、`.github`、`.cursor`、`.claude` 项目文件。
+Skill 仅提供用法；**未注册 MCP Server 时不会出现工具**。Codex/Cursor 需 PATH 中有可启动 launcher 的 `node`，launcher 会从 `ACE_CODE_SEARCH_NODE`、Cursor helper、版本化 PATH 命令和 macOS Homebrew 安装中选择与 VSIX 内置 Node 20/22/24 绑定匹配的 runtime；VS Code Provider 使用编辑器运行时。项目指导只保留在 `.agents`，普通安装不创建 `.codex`、`.github`、`.cursor`、`.claude` 项目文件。
 
 搜索面板状态栏：灰色 **Waiting**、绿色 **Ready**、黄色显示脱敏动作摘要（如 `正在搜索 “xxx”`）。多 IDE 进程按工作区聚合显示，各 stdio 会话独立。Skill 建议有索引时优先 MCP，无索引/不完整/未入库时回退 `rg`/读文件。
 
@@ -100,7 +100,8 @@ Workspace Primary/Secondary selection, `workspaceIndexBindingV2`, shared-index c
 
 安装行为见上文 **Agent 集成与用户状态**。实现要点：
 
-- Launcher 每次启动发现最新已安装扩展，配置不绑定版本路径
+- Launcher 每次启动发现最新已安装扩展，配置不绑定版本路径；无 resolver 的旧扩展仍可按原方式直启
+- Launcher 切换 Node 时只转发脚本及其参数（不把旧 Node 可执行文件误当脚本）；新版 `dist/mcp.js` 也执行同一检查，使旧 launcher 在扩展升级后可直接恢复
 - 托管文件用 owner/kind/content-hash marker；用户修改或无效 marker 保留并警告
 - 可验证的 legacy 项目 `.codex`、`.cursor/skills`、`.cursor/rules`、`.claude/skills`、`.github/instructions` 会迁移/清理
 - `resources/skills/ace-code-search-mcp/SKILL.md` 必须与 `.agents/skills/ace-code-search-mcp/SKILL.md` 字节一致
@@ -118,7 +119,7 @@ The extension polls every 500 ms, filters sessions to overlapping workspace root
 
 Cursor's shared MCP process may publish an initializing durable snapshot before it has requested `tools/list`, which leaves a connected user server visible with zero tools. `src/mcp/serverLifecycle.ts` sends `notifications/tools/list_changed` once the client sends `notifications/initialized`; this prompts a fresh snapshot while preserving the same five tool schemas and independent stdio session.
 
-For local packaging, Cursor may resolve the user MCP `node` command to `Cursor/.../resources/helpers/node` rather than the system Node used by the build terminal. `build.bat` and `build.sh` therefore run `scripts/rebuild-node.js --all-detected`: it follows the installed Cursor CLI to that helper, stages every distinct detected Node 20/22/24 ABI under `native-node/`, and rebuilds the current system Node last so tests still load correctly. CI release packaging continues to merge the complete ABI 115/127/137 matrix on every supported platform.
+For local packaging, Cursor may resolve the user MCP `node` command to `Cursor/.../resources/helpers/node` rather than the system Node used by the build terminal. `build.bat` and `build.sh` therefore run `scripts/rebuild-node.js --all-detected`: it follows the installed Cursor CLI to that helper, stages every distinct detected Node 20/22/24 ABI under `native-node/`, and rebuilds the current system Node last so tests still load correctly. CI release packaging continues to merge the complete ABI 115/127/137 matrix on every supported platform, and VSIX validation requires both `scripts/mcp-node-resolver.js` and `scripts/native-matrix.js` so a package cannot advertise runtime fallback without shipping it.
 
 #### Prefer-indexed-search guidance
 

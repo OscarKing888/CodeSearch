@@ -11,6 +11,8 @@ const {
 const REQUIRED_RUNTIME_ENTRIES = [
   'extension/dist/mcp.js',
   'extension/dist/cli.js',
+  'extension/scripts/mcp-node-resolver.js',
+  'extension/scripts/native-matrix.js',
   'extension/node_modules/better-sqlite3/package.json',
   'extension/node_modules/better-sqlite3/lib/index.js',
   'extension/node_modules/better-sqlite3/lib/database.js',

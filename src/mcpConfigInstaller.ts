@@ -7,7 +7,7 @@ export const MCP_SERVER_NAME = 'ace-code-search';
 const OWNER = 'OscarKing888.ace-code-search';
 const CODEX_BEGIN = '# BEGIN ACE-CODE-SEARCH-MCP';
 const CODEX_END = '# END ACE-CODE-SEARCH-MCP';
-const LAUNCHER_HEADER = '// ACE-CODE-SEARCH-MCP-LAUNCHER v1';
+const LAUNCHER_HEADER = '// ACE-CODE-SEARCH-MCP-LAUNCHER v2';
 const LAUNCHER_DIR = '.ace-code-search';
 const LAUNCHER_FILE = 'mcp-launcher.cjs';
 const LAUNCHER_MARKER = '.mcp-launcher-managed.json';
@@ -285,20 +285,14 @@ if (!selected) {
     'Ace Code Search MCP extension files were not found. Reinstall the extension, then rerun its Agent Integration command.'
   );
 }
-const { spawnSync } = require('child_process');
-const { resolveCompatibleMcpNode, executablePathKey } = require(
-  path.join(selected.root, 'scripts', 'mcp-node-resolver.js')
-);
-const compatibleNode = resolveCompatibleMcpNode(selected.root);
-if (executablePathKey(compatibleNode) !== executablePathKey(process.execPath)) {
-  const result = spawnSync(compatibleNode, process.argv, {
-    stdio: 'inherit',
-    env: process.env,
-  });
-  if (result.error) {
-    throw result.error;
+const resolverPath = path.join(selected.root, 'scripts', 'mcp-node-resolver.js');
+const matrixPath = path.join(selected.root, 'scripts', 'native-matrix.js');
+if (fs.existsSync(resolverPath) && fs.existsSync(matrixPath)) {
+  const { relaunchWithCompatibleMcpNode } = require(resolverPath);
+  const relaunchExitCode = relaunchWithCompatibleMcpNode(selected.root);
+  if (relaunchExitCode !== undefined) {
+    process.exit(relaunchExitCode);
   }
-  process.exit(result.status == null ? 1 : result.status);
 }
 const entryPath = path.join(selected.root, 'dist', 'mcp.js');
 if (!process.argv.includes('--extension-root')) {

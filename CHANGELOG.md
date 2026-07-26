@@ -16,7 +16,7 @@ All notable changes to the Ace Code Search extension are documented in this file
 ### Fixed
 
 - Cursor/Windows MCP roots compatibility, scope refresh after roots changes, fail-closed on invalid roots
-- Cursor zero-tool snapshot recovery; local packages include Cursor helper Node ABI; MCP launcher re-execs to compatible Node 20/22/24 when PATH Node ABI mismatches packaged `native-node/` (for example Node 23)
+- Cursor zero-tool snapshot recovery; local packages include Cursor helper Node ABI; MCP launcher and legacy entrypoints re-exec to compatible Node 20/22/24 when PATH Node ABI mismatches packaged `native-node/` (for example Node 23), preserving script arguments across macOS/Linux/Windows
 - Primary switching and registry / writer lock races; macOS install target detection when PATH `code` is Cursor's shim
 - MCP discovery, multi-index handling, and `partialIndex` reporting; Electron / Node 20/22/24 native matrix loading
 - High Extension Host CPU and search stalls in large UE workspaces; class hierarchy stack overflow; C/C++ / clangd Alt+O command conflicts

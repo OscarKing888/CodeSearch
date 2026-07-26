@@ -38,16 +38,25 @@ function resolveNativeBinaryPath(root: string): string {
       return devBuild;
     }
 
-    const availableNode = listAvailableNativeBinaries(path.join(root, 'native-node'));
+    const availableNode = listAvailableNativeBinaries(
+      path.join(root, 'native-node'),
+      `${process.platform}-${process.arch}-`
+    );
     const supportedAbis = new Set(['115', '127', '137']);
-    const mcpHint = supportedAbis.has(abi)
-      ? ''
-      : ' For MCP/Cursor/Codex, rerun Install Agent Integration so the launcher can re-exec to a compatible Node, or set ACE_CODE_SEARCH_NODE.';
+    if (!supportedAbis.has(abi) && availableNode.length > 0) {
+      throw new Error(
+        `No better_sqlite3 binary for Node ABI ${abi} (${tag}). ` +
+          `Packaged Node builds for this platform: ${availableNode.join(', ')}. ` +
+          'For MCP/Cursor/Codex, rerun Install Agent Integration so the launcher can ' +
+          'select Node.js 20/22/24, or set ACE_CODE_SEARCH_NODE to a compatible executable. ' +
+          'Source builds may instead run `npm run rebuild:node`.'
+      );
+    }
     throw new Error(
       `No better_sqlite3 binary for Node ABI ${abi} (${tag}). ` +
         `Available Node builds: ${availableNode.join(', ') || 'none'}. ` +
-        'Run `npm run rebuild:node` (or build.sh) so native-node/ is populated, then reinstall the extension.' +
-        mcpHint
+        'The extension package has no native build usable by this runtime and platform. ' +
+        'Reinstall a complete VSIX, or for a source build run `npm run rebuild:node` (or build.sh).'
     );
   }
 
@@ -77,13 +86,20 @@ function resolveNativeBinaryPath(root: string): string {
   );
 }
 
-function listAvailableNativeBinaries(nativeDir: string): string[] {
+function listAvailableNativeBinaries(
+  nativeDir: string,
+  prefix?: string
+): string[] {
   if (!fs.existsSync(nativeDir)) {
     return [];
   }
   return fs
     .readdirSync(nativeDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        (prefix === undefined || entry.name.startsWith(prefix))
+    )
     .map((entry) => entry.name);
 }
 

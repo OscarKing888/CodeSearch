@@ -234,6 +234,41 @@ function testCursorMergeSafety(): void {
   );
 }
 
+function testLegacyExtensionWithoutResolverStillLaunches(): void {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ace-mcp-legacy-launcher-'));
+  const extensionRoot = path.join(
+    tmpDir,
+    'oscarking888.ace-code-search-999.0.0'
+  );
+  const mcpPath = resolveMcpJsPath(extensionRoot);
+  const launcherPath = path.join(tmpDir, 'mcp-launcher.cjs');
+  fs.mkdirSync(path.dirname(mcpPath), { recursive: true });
+  fs.writeFileSync(
+    path.join(extensionRoot, 'package.json'),
+    JSON.stringify({
+      publisher: 'OscarKing888',
+      name: 'ace-code-search',
+      version: '999.0.0',
+    })
+  );
+  fs.writeFileSync(mcpPath, 'process.stdout.write("legacy-direct-start");\n');
+  fs.writeFileSync(launcherPath, buildMcpLauncher(extensionRoot));
+
+  try {
+    const launched = spawnSync(process.execPath, [launcherPath], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ACE_CODE_SEARCH_EXTENSION_ROOT: extensionRoot,
+      },
+    });
+    assert.strictEqual(launched.status, 0, launched.stderr);
+    assert.strictEqual(launched.stdout, 'legacy-direct-start');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 async function testInstallAndLauncher(): Promise<void> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ace-mcp-config-'));
   const extensionRoot = path.join(tmpDir, 'oscarking888.ace-code-search-999.0.0');
@@ -426,9 +461,10 @@ async function main(): Promise<void> {
   testCursorMergeSafety();
   assert.ok(buildMcpLauncher(process.cwd()).startsWith('// ACE-CODE-SEARCH-MCP-LAUNCHER'));
   const launcherSource = buildMcpLauncher(process.cwd());
-  assert.ok(launcherSource.includes('resolveCompatibleMcpNode'));
-  assert.ok(launcherSource.includes('spawnSync'));
+  assert.ok(launcherSource.includes('relaunchWithCompatibleMcpNode'));
   assert.ok(launcherSource.includes('mcp-node-resolver.js'));
+  assert.ok(!launcherSource.includes('spawnSync(compatibleNode, process.argv'));
+  testLegacyExtensionWithoutResolverStillLaunches();
   await testInstallAndLauncher();
   console.log('mcpConfigInstaller tests passed');
 }

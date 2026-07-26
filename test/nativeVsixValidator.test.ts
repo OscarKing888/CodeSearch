@@ -47,6 +47,8 @@ async function writeSyntheticVsix(vsixPath: string, repoRoot: string): Promise<v
   for (const entry of [
     'extension/dist/mcp.js',
     'extension/dist/cli.js',
+    'extension/scripts/mcp-node-resolver.js',
+    'extension/scripts/native-matrix.js',
     'extension/node_modules/better-sqlite3/package.json',
     'extension/node_modules/better-sqlite3/lib/index.js',
     'extension/node_modules/better-sqlite3/lib/database.js',
@@ -76,7 +78,7 @@ async function main(): Promise<void> {
       { encoding: 'utf8', cwd: repoRoot }
     );
     assert.strictEqual(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /Validated 24 native binaries and 5 MCP\/CLI runtime entries/);
+    assert.match(result.stdout, /Validated 24 native binaries and 7 MCP\/CLI runtime entries/);
     if (matrix.expectedNodeTags().includes(
       `${process.platform}-${process.arch}-${process.versions.modules}`
     )) {

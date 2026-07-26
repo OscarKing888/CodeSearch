@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 
 const matrix = require('../scripts/native-matrix') as {
   NATIVE_BINARY_NAME: string;
@@ -10,11 +10,26 @@ const matrix = require('../scripts/native-matrix') as {
 const {
   cursorHelperNodePath,
   listPackagedNodeTags,
+  nodeCommandNames,
+  relaunchWithCompatibleMcpNode,
   resolveCompatibleMcpNode,
+  wellKnownNodeCandidates,
 } = require('../scripts/mcp-node-resolver') as {
   cursorHelperNodePath: (cliPath: string, platform?: NodeJS.Platform) => string;
   listPackagedNodeTags: (extensionRoot: string) => string[];
+  nodeCommandNames: (platform?: NodeJS.Platform) => string[];
+  relaunchWithCompatibleMcpNode: (
+    extensionRoot: string,
+    options?: {
+      argv?: string[];
+      currentExecPath?: string;
+      compatibleNode?: string;
+      env?: NodeJS.ProcessEnv;
+      spawnSync?: typeof spawnSync;
+    }
+  ) => number | undefined;
   resolveCompatibleMcpNode: (extensionRoot: string) => string;
+  wellKnownNodeCandidates: (platform?: NodeJS.Platform) => string[];
 };
 
 function writePackagedNodeBinary(extensionRoot: string, tag: string): void {
@@ -64,6 +79,31 @@ function testCursorHelperNodePath(): void {
     ),
     '/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node'
   );
+}
+
+function testCrossPlatformNodeCandidates(): void {
+  assert.deepStrictEqual(nodeCommandNames('darwin'), [
+    'node',
+    'node20',
+    'node22',
+    'node24',
+  ]);
+  assert.deepStrictEqual(nodeCommandNames('win32'), [
+    'node.exe',
+    'node20.exe',
+    'node22.exe',
+    'node24.exe',
+    'node',
+    'node20',
+    'node22',
+    'node24',
+  ]);
+  assert.ok(
+    wellKnownNodeCandidates('darwin').includes(
+      '/opt/homebrew/opt/node@22/bin/node'
+    )
+  );
+  assert.deepStrictEqual(wellKnownNodeCandidates('win32'), []);
 }
 
 function testListPackagedNodeTags(): void {
@@ -170,13 +210,81 @@ function testResolveCompatibleMcpNodeThrowsWhenNoMatch(): void {
   }
 }
 
+function testRelaunchDropsParentNodeExecutableArgument(): void {
+  const argv = [
+    path.resolve('old-node'),
+    path.resolve('mcp-launcher.cjs'),
+    '--workspace-root',
+    path.resolve('workspace with spaces'),
+  ];
+  let observed:
+    | { command: string; args: readonly string[]; options: unknown }
+    | undefined;
+  const status = relaunchWithCompatibleMcpNode(path.resolve('extension'), {
+    argv,
+    currentExecPath: path.resolve('old-node'),
+    compatibleNode: path.resolve('compatible-node'),
+    spawnSync: ((command: string, args: readonly string[], options: unknown) => {
+      observed = { command, args, options };
+      return { status: 0 };
+    }) as typeof spawnSync,
+  });
+
+  assert.strictEqual(status, 0);
+  assert.ok(observed);
+  assert.strictEqual(observed.command, path.resolve('compatible-node'));
+  assert.deepStrictEqual(observed.args, argv.slice(1));
+  assert.ok(!observed.args.includes(argv[0]));
+}
+
+function testRelaunchRunsScriptWithDistinctRuntimeWhenAvailable(): void {
+  const compatible = findSupportedNodeExecutable('127');
+  if (!compatible || process.versions.modules === '127') {
+    console.log('Skipping live relaunch test: no distinct Node ABI 127 runtime found.');
+    return;
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ace-mcp-node-relaunch-'));
+  const probe = path.join(tmpDir, 'probe.js');
+  fs.writeFileSync(
+    probe,
+    'process.stdout.write(JSON.stringify({ abi: process.versions.modules, argv: process.argv.slice(2) }));\n'
+  );
+  let stdout = '';
+  try {
+    const status = relaunchWithCompatibleMcpNode(tmpDir, {
+      argv: [process.execPath, probe, 'value with spaces'],
+      compatibleNode: compatible,
+      spawnSync: ((command: string, args: readonly string[], options: unknown) => {
+        const result = spawnSync(command, args, {
+          ...(options as object),
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        stdout = result.stdout;
+        return result;
+      }) as typeof spawnSync,
+    });
+    assert.strictEqual(status, 0);
+    assert.deepStrictEqual(JSON.parse(stdout), {
+      abi: '127',
+      argv: ['value with spaces'],
+    });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 function main(): void {
   testCursorHelperNodePath();
+  testCrossPlatformNodeCandidates();
   testListPackagedNodeTags();
   testResolveCompatibleMcpNodeUsesCurrentRuntimeWhenPackaged();
   testResolveCompatibleMcpNodeUsesEnvOverride();
   testResolveCompatibleMcpNodeFindsCursorHelperOnMismatch();
   testResolveCompatibleMcpNodeThrowsWhenNoMatch();
+  testRelaunchDropsParentNodeExecutableArgument();
+  testRelaunchRunsScriptWithDistinctRuntimeWhenAvailable();
   console.log('mcpNodeResolver tests passed');
 }
 

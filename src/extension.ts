@@ -348,7 +348,7 @@ async function installAgentSkill(
     void vscode.window.showInformationMessage(
       `Ace Code Search: Canonical .agents Skill and user MCP config installed for ${rootLabel}. ` +
         'Restart Codex (or run /mcp) so list_indexes / search_code appear. ' +
-        'Codex/Cursor require Node.js 20, 22, or 24 on PATH; VS Code uses its editor runtime.'
+        'Codex/Cursor automatically select an available Node.js 20/22/24 runtime; VS Code uses its editor runtime.'
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

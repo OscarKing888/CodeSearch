@@ -12,6 +12,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { RootsListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { McpStatusReporter } from '../mcpStatus';
+import { resolveExtensionRoot } from '../native/extensionRoot';
 import {
   CompatibleListRootsResultSchema,
   parseClientWorkspaceRoots,
@@ -52,6 +53,26 @@ Log only to stderr — stdout is reserved for MCP JSON-RPC.
 `);
 }
 
+function relaunchForCompatibleSystemNode(
+  extensionRoot: string
+): number | undefined {
+  // VS Code's provider intentionally runs Electron as Node and loads native/.
+  // Codex/Cursor and remote system-Node hosts use native-node/ and may need a
+  // packaged Node 20/22/24 runtime instead of the client's PATH Node.
+  if (process.versions.electron) {
+    return undefined;
+  }
+  // Kept outside the esbuild bundle so the launcher and legacy direct MCP
+  // entrypoints share exactly the same cross-platform runtime selection.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const resolver = require(
+    path.join(extensionRoot, 'scripts', 'mcp-node-resolver.js')
+  ) as {
+    relaunchWithCompatibleMcpNode(root: string): number | undefined;
+  };
+  return resolver.relaunchWithCompatibleMcpNode(extensionRoot);
+}
+
 async function main(): Promise<void> {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     printHelp();
@@ -59,6 +80,13 @@ async function main(): Promise<void> {
   }
 
   const options = parseMcpCliArgs(process.argv);
+  const extensionRoot =
+    options.extensionRoot ?? resolveExtensionRoot(__dirname);
+  const relaunchExitCode = relaunchForCompatibleSystemNode(extensionRoot);
+  if (relaunchExitCode !== undefined) {
+    process.exit(relaunchExitCode);
+  }
+  options.extensionRoot = extensionRoot;
   const session = await McpIndexSession.create(options);
   const handlers = new McpToolHandlers(session, {
     log: (message) => console.error(message),
