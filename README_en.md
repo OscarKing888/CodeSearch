@@ -24,6 +24,20 @@ Requires VS Code or Cursor **1.103** or newer.
 - **Index management**: open the ⚙ panel to configure Primary / Secondary indexes, shared paths, and search scope
 - **AI Agent integration**: read-only MCP lets Cursor, Copilot, and other agents query existing indexes; install from the toolbar document icon or command palette
 
+## Query syntax
+
+Filters must be standalone whitespace-delimited items. Positive filters of the same kind are combined with **OR**, different filter kinds with **AND**, and any matching exclusion wins.
+
+```text
+Text:  needle ext:h,cpp,inc file:*Parser* dir:src/** -file:*.test.* -dir:*generated* -ext:bak
+Regex: enable .* and enter ^class\s+\w+\b ext:h,cpp -dir:*ThirdParty*
+```
+
+- `ext:` accepts comma-separated extensions. `file:` and `dir:` use case-insensitive standard glob syntax: `*` stays within one path segment, `**` crosses directories, `?` matches one character, and path separators are normalized.
+- Quote values containing spaces, for example `file:"My File*.cpp"`. Regex mode accepts a per-line ECMAScript pattern without `/.../flags`; `Aa` controls case sensitivity.
+- In regex mode, only a consecutive suffix of `ext:` / `file:` / `dir:` / `age:` filters is parsed. Regexes do not span lines and may be slower than indexed text search on large indexes.
+- The dropdown next to `.*` inserts common regex snippets at the current caret or selection. The menu is panel-only; MCP callers enable the same search mode with `regex: true`.
+
 ## Shortcuts
 
 | Command | Shortcut |

@@ -61,7 +61,7 @@ npm run mcp -- --all-indexes
 | `find_header_source` | Find indexed C/C++ header/source counterparts |
 | `search_class_hierarchy` | Return a class's descendant inheritance DAG with source locations |
 
-Key `search_code` parameters: `caseSensitive`, `phraseSearch`, `fuzzy`, `loose` + `looseGap`, `contextLines`, `maxResults`; query syntax supports `ext:`, `file:`, `dir:`, `age:`, `+/-` content filters, and `*` wildcards. There is no dedicated strict `wholeWord` parameter; for names with hyphens or punctuation, split according to tokenization (e.g. search `better sqlite3` for `better-sqlite3`).
+Key `search_code` parameters: `caseSensitive`, `phraseSearch`, `regex`, `fuzzy`, `loose` + `looseGap`, `contextLines`, and `maxResults`. `regex: true` enables per-line ECMAScript matching; a consecutive suffix of path/age filters remains active, while Phrase/Fuzzy/Loose are ignored. Query syntax supports `ext:`, `file:`, `dir:`, `age:`, `+/-` content filters, and wildcards. There is no dedicated strict `wholeWord` parameter; for names with hyphens or punctuation, split according to tokenization (e.g. search `better sqlite3` for `better-sqlite3`).
 
 `search_class_hierarchy` is case-sensitive; a qualified name resolves uniquely, ambiguous short names return candidates. `maxNodes` is 1–5000 or `"all"`; when omitted, reads user setting `codeSearch.mcpClassHierarchyDefaultMaxNodes` (default 20, 0 means all). MCP is read-only and never writes databases or registries; Primary/Secondary selection and writer leases are editor-side operations.
 
@@ -369,10 +369,10 @@ Targets after indexing completes: first `AActor` batch ≤500ms, 10k hits ≤5s,
 | | Ace Code Search CLI | ✅ |
 | **AI Agent** | Read-only MCP (search / read / hierarchy / header-source) | ✅ |
 | | Skill and MCP status bar | ✅ |
-| **Search** | Word / phrase / fuzzy / loose / wildcards / filter-only | ✅ |
+| **Search** | Word / phrase / fuzzy / loose / wildcards / per-line regex / filter-only | ✅ |
 | | Case / phrase default / context lines | ✅ |
 | **Filters** | `ext:` / `file:` / `dir:` / `age:` / `+/-` | ✅ |
-| **Results UI** | Bottom panel / tabs / lock / sort / autocomplete | ✅ |
+| **Results UI** | Bottom panel / tabs / lock / sort / autocomplete / regex snippet menu | ✅ |
 | | Syntax highlighting | 🟡 rule-based |
 | | C++ class inheritance tree | ✅ |
 | **Navigation** | Alt+= search selection / hit navigation / Shift+Alt+F | ✅ |
@@ -519,22 +519,26 @@ Indexing flow: scan files → read text → INSERT/UPDATE `files` + sync `files_
 User input is parsed into a structured object:
 
 ```
-Input:  myVar ext:cpp dir:utils -file:ChangeLog age:2h
-Output: { terms: ["myVar"], filters: { ext: ["cpp"], dir: ["utils"], fileExclude: ["ChangeLog"], ageMax: "2h" } }
+Input:  myVar ext:h,cpp,inc dir:src/** -file:*.test.* age:2h
+Output: { terms: ["myVar"], filters: { ext: ["h", "cpp", "inc"], dir: ["src/**"], fileExclude: ["*.test.*"], ageMax: "2h" } }
 ```
 
 - **FTS5 queries**: words/phrases map to FTS5 MATCH syntax
-- **Wildcards**: word-level `*` → FTS5 prefix query (`token*`); inline/cross-line wildcards use `WildcardMatcher` post-processing
+- **Filter tokens**: filters are recognized only outside quotes as standalone whitespace-delimited items; same-kind includes use OR, different kinds use AND, and exclusions win
+- **Path globs**: `file:` / `dir:` use case-insensitive standard glob syntax with normalized separators (`*` stays in one segment, `**` crosses directories, `?` matches one character); `ext:` accepts comma-separated values
+- **Content wildcards**: word-level `*` → FTS5 prefix query (`token*`); inline/cross-line wildcards use `WildcardMatcher` post-processing
 - **age filter**: SQL `WHERE mtime > ?` joined with FTS results
-- **ext/dir/file filters**: path glob matching on `files`
+- **ext/dir/file filters**: match both indexed paths and directory-mapped local paths
 - **Filter-only**: no search terms → direct SELECT on `files`
+- **Regex**: raw ECMAScript patterns are matched per line without `/.../flags`; only a trailing consecutive path/age-filter suffix is parsed, multiline matches are unsupported, and large-index scans may be slower than FTS
+- **Candidate iteration**: candidates are not capped before path/content post-filters; synchronous and streaming searches iterate lazily until the real result limit
 
 ### Search panel UI
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ [Search: myVar ext:cpp]  [Aa] [""]  [⟳]  [⚙]              │
-│  Case  Phrase  Refresh  Settings                            │
+│ [Search: myVar ext:cpp]  [Aa] [""] [Fz] [~] [.* ▾] [⟳]    │
+│  Case  Phrase Fuzzy Loose Regex/Menu Refresh                │
 ├─────────────────────────────────────────────────────────────┤
 │ 1,234 hits in 56 files · 0.08s          Indexing: 42% ████░ │
 ├─────────────────────────────────────────────────────────────┤

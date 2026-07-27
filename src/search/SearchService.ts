@@ -29,7 +29,10 @@ type CandidateRow = {
 type CandidateQuery = { kind: 'stmt'; sql: string; params: (string | number)[] };
 
 export class SearchService {
-  constructor(private indexService: IndexService) {}
+  constructor(
+    private indexService: IndexService,
+    private readonly mapPath: (indexedPath: string) => string = (indexedPath) => indexedPath
+  ) {}
 
   search(queryText: string, options: SearchOptions): SearchResult {
     const start = Date.now();
@@ -38,7 +41,12 @@ export class SearchService {
       return emptyResult(queryText, start, true);
     }
 
-    const parsed = parseQuery(queryText, options.phraseSearch, options.looseGap);
+    const parsed = parseQuery(
+      queryText,
+      options.phraseSearch,
+      options.looseGap,
+      options.regex ?? false
+    );
     const partialIndex = this.indexService.isPartialIndex();
 
     if (options.loose && !parsed.loose) {
@@ -59,7 +67,9 @@ export class SearchService {
     try {
       let hits: SearchHit[];
 
-      if (parsed.multiWildcard && parsed.terms.length === 1) {
+      if (options.regex) {
+        hits = this.regexSearch(db, parsed, options);
+      } else if (parsed.multiWildcard && parsed.terms.length === 1) {
         hits = this.wildcardSearch(db, parsed, options);
       } else if (parsed.loose) {
         hits = this.looseSearch(db, parsed, options);
@@ -83,7 +93,8 @@ export class SearchService {
 
   async *searchStreaming(
     queryText: string,
-    options: SearchOptions
+    options: SearchOptions,
+    signal?: AbortSignal
   ): AsyncGenerator<SearchStreamBatch> {
     const start = Date.now();
     const db = this.indexService.getDatabase();
@@ -92,7 +103,12 @@ export class SearchService {
       return;
     }
 
-    const parsed = parseQuery(queryText, options.phraseSearch, options.looseGap);
+    const parsed = parseQuery(
+      queryText,
+      options.phraseSearch,
+      options.looseGap,
+      options.regex ?? false
+    );
     const partialIndex = this.indexService.isPartialIndex();
 
     if (options.loose && !parsed.loose) {
@@ -105,7 +121,14 @@ export class SearchService {
     try {
       if (parsed.filterOnly) {
         profileMark('search_streaming_start', { path: 'filterOnly' });
-        yield* this.filterOnlySearchStreaming(db, parsed, options, start, partialIndex);
+        yield* this.filterOnlySearchStreaming(
+          db,
+          parsed,
+          options,
+          start,
+          partialIndex,
+          signal
+        );
         return;
       }
 
@@ -115,20 +138,47 @@ export class SearchService {
         return;
       }
 
+      if (options.regex) {
+        profileMark('search_streaming_start', { path: 'regex' });
+        yield* this.regexSearchStreaming(db, parsed, options, start, partialIndex, signal);
+        return;
+      }
+
       if (parsed.multiWildcard && parsed.terms.length === 1) {
         profileMark('search_streaming_start', { path: 'wildcard' });
-        yield* this.wildcardSearchStreaming(db, parsed, options, start, partialIndex);
+        yield* this.wildcardSearchStreaming(
+          db,
+          parsed,
+          options,
+          start,
+          partialIndex,
+          signal
+        );
         return;
       }
 
       if (parsed.loose) {
         profileMark('search_streaming_start', { path: 'loose' });
-        yield* this.looseSearchStreaming(db, parsed, options, start, partialIndex);
+        yield* this.looseSearchStreaming(
+          db,
+          parsed,
+          options,
+          start,
+          partialIndex,
+          signal
+        );
         return;
       }
 
       profileMark('search_streaming_start', { path: 'standard' });
-      yield* this.standardSearchStreaming(db, parsed, options, start, partialIndex);
+      yield* this.standardSearchStreaming(
+        db,
+        parsed,
+        options,
+        start,
+        partialIndex,
+        signal
+      );
     } finally {
       profileMark('search_streaming_done');
       this.indexService.resume();
@@ -158,7 +208,8 @@ export class SearchService {
     parsed: ParsedQuery,
     options: SearchOptions,
     start: number,
-    partialIndex: boolean
+    partialIndex: boolean,
+    signal?: AbortSignal
   ): AsyncGenerator<SearchStreamBatch> {
     const ftsQuery = buildFtsMatch(parsed.terms, parsed.phrase);
     if (!ftsQuery) {
@@ -166,7 +217,15 @@ export class SearchService {
       return;
     }
 
-    yield* this.executeFtsSearchStreaming(db, ftsQuery, parsed, options, start, partialIndex);
+    yield* this.executeFtsSearchStreaming(
+      db,
+      ftsQuery,
+      parsed,
+      options,
+      start,
+      partialIndex,
+      signal
+    );
   }
 
   private async *looseSearchStreaming(
@@ -174,7 +233,8 @@ export class SearchService {
     parsed: ParsedQuery,
     options: SearchOptions,
     start: number,
-    partialIndex: boolean
+    partialIndex: boolean,
+    signal?: AbortSignal
   ): AsyncGenerator<SearchStreamBatch> {
     const yieldThrottle = new StreamYieldThrottle();
     const looseTerms = parsed.terms.flatMap((t) =>
@@ -183,7 +243,10 @@ export class SearchService {
     const ftsQuery = buildFtsMatch(looseTerms, false, true);
     const buffer = new HitStreamBuffer();
 
-    for await (const row of this.iterateCandidateRows(db, ftsQuery, parsed, options)) {
+    for await (const row of this.iterateCandidateRows(db, ftsQuery, parsed, signal)) {
+      if (signal?.aborted) {
+        return;
+      }
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -226,7 +289,8 @@ export class SearchService {
     parsed: ParsedQuery,
     options: SearchOptions,
     start: number,
-    partialIndex: boolean
+    partialIndex: boolean,
+    signal?: AbortSignal
   ): AsyncGenerator<SearchStreamBatch> {
     const yieldThrottle = new StreamYieldThrottle();
     const pattern = parsed.terms[0];
@@ -238,8 +302,11 @@ export class SearchService {
       db,
       ftsQuery || pattern.replace(/\*/g, ''),
       parsed,
-      options
+      signal
     )) {
+      if (signal?.aborted) {
+        return;
+      }
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -270,31 +337,89 @@ export class SearchService {
     yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
   }
 
+  private async *regexSearchStreaming(
+    db: SqliteDatabase,
+    parsed: ParsedQuery,
+    options: SearchOptions,
+    start: number,
+    partialIndex: boolean,
+    signal?: AbortSignal
+  ): AsyncGenerator<SearchStreamBatch> {
+    const regex = this.compileRegex(parsed.terms[0] ?? '', options.caseSensitive);
+    const yieldThrottle = new StreamYieldThrottle();
+    const buffer = new HitStreamBuffer();
+
+    for await (const row of this.iterateCandidateRows(db, '', parsed, signal)) {
+      if (signal?.aborted) {
+        return;
+      }
+      if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
+        continue;
+      }
+
+      for await (const hit of this.iterateRegexHitsStreaming(
+        row.path,
+        row.content,
+        regex,
+        options.contextLines,
+        options.maxResults - buffer.getHitCount(),
+        signal
+      )) {
+        if (signal?.aborted) {
+          return;
+        }
+        const batch = buffer.add(hit);
+        if (batch) {
+          yield this.makeProfileStreamBatch(
+            batch,
+            false,
+            buffer,
+            start,
+            parsed.raw,
+            partialIndex
+          );
+          await yieldThrottle.maybeYield();
+        }
+        if (buffer.getHitCount() >= options.maxResults) {
+          yield* this.finalizeStreamBatch(
+            buffer,
+            start,
+            parsed.raw,
+            partialIndex,
+            yieldThrottle
+          );
+          return;
+        }
+      }
+    }
+
+    if (!signal?.aborted) {
+      yield* this.finalizeStreamBatch(
+        buffer,
+        start,
+        parsed.raw,
+        partialIndex,
+        yieldThrottle
+      );
+    }
+  }
+
   private async *filterOnlySearchStreaming(
     db: SqliteDatabase,
     parsed: ParsedQuery,
     options: SearchOptions,
     start: number,
-    partialIndex: boolean
+    partialIndex: boolean,
+    signal?: AbortSignal
   ): AsyncGenerator<SearchStreamBatch> {
     const yieldThrottle = new StreamYieldThrottle();
-    const now = Date.now();
-    let sql = `SELECT path, content, ext, dir, mtime FROM files WHERE 1=1`;
-    const params: (string | number)[] = [];
-    sql += this.buildMtimeFilter(parsed, now, params);
-
-    const rows = db.prepare(sql).all(...params) as Array<{
-      path: string;
-      content: string;
-      ext: string;
-      dir: string;
-      mtime: number;
-    }>;
-
     const buffer = new HitStreamBuffer();
     const seenFiles = new Set<string>();
 
-    for (const row of rows) {
+    for await (const row of this.iterateCandidateRows(db, '', parsed, signal)) {
+      if (signal?.aborted) {
+        return;
+      }
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -334,7 +459,8 @@ export class SearchService {
     parsed: ParsedQuery,
     options: SearchOptions,
     start: number,
-    partialIndex: boolean
+    partialIndex: boolean,
+    signal?: AbortSignal
   ): AsyncGenerator<SearchStreamBatch> {
     const yieldThrottle = new StreamYieldThrottle();
     const buffer = new HitStreamBuffer();
@@ -342,7 +468,10 @@ export class SearchService {
       parsed.phrase && !parsed.multiWildcard ? [t] : t.split(/\s+/).filter(Boolean)
     );
 
-    for await (const row of this.iterateCandidateRows(db, ftsQuery, parsed, options)) {
+    for await (const row of this.iterateCandidateRows(db, ftsQuery, parsed, signal)) {
+      if (signal?.aborted) {
+        return;
+      }
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -370,12 +499,16 @@ export class SearchService {
       }
     }
 
+    if (signal?.aborted) {
+      return;
+    }
+
     if (options.fuzzy && buffer.getHitCount() < options.maxResults) {
       const primaryKeys = buffer.getHitKeys();
       const fuzzyHits = this.fuzzyContentSearch(db, parsed, {
         ...options,
         maxResults: options.maxResults - buffer.getHitCount(),
-      });
+      }, signal);
       for (const hit of fuzzyHits) {
         const key = `${hit.path}:${hit.line}:${hit.matchStart}`;
         if (primaryKeys.has(key)) {
@@ -393,7 +526,9 @@ export class SearchService {
       }
     }
 
-    yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+    if (!signal?.aborted) {
+      yield* this.finalizeStreamBatch(buffer, start, parsed.raw, partialIndex, yieldThrottle);
+    }
   }
 
   private async *finalizeStreamBatch(
@@ -430,6 +565,34 @@ export class SearchService {
     return hits.slice(0, options.maxResults);
   }
 
+  private regexSearch(
+    db: SqliteDatabase,
+    parsed: ParsedQuery,
+    options: SearchOptions
+  ): SearchHit[] {
+    const regex = this.compileRegex(parsed.terms[0] ?? '', options.caseSensitive);
+    const hits: SearchHit[] = [];
+
+    for (const row of this.iterateCandidateRowsSync(db, '', parsed)) {
+      if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
+        continue;
+      }
+      hits.push(
+        ...this.findRegexHits(
+          row.path,
+          row.content,
+          regex,
+          options.contextLines,
+          options.maxResults - hits.length
+        )
+      );
+      if (hits.length >= options.maxResults) {
+        break;
+      }
+    }
+    return hits.slice(0, options.maxResults);
+  }
+
   private looseSearch(
     db: SqliteDatabase,
     parsed: ParsedQuery,
@@ -440,10 +603,8 @@ export class SearchService {
     );
 
     const ftsQuery = buildFtsMatch(looseTerms, false, true);
-    const rows = this.fetchCandidateRows(db, ftsQuery, parsed, options);
-
     const hits: SearchHit[] = [];
-    for (const row of rows) {
+    for (const row of this.iterateCandidateRowsSync(db, ftsQuery, parsed)) {
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -483,10 +644,12 @@ export class SearchService {
     const pattern = parsed.terms[0];
     const literalParts = pattern.split(/\s*\*(?::\d+)?\s*/).filter(Boolean);
     const ftsQuery = buildFtsMatch(literalParts, false, true);
-    const rows = this.fetchCandidateRows(db, ftsQuery || pattern.replace(/\*/g, ''), parsed, options);
-
     const hits: SearchHit[] = [];
-    for (const row of rows) {
+    for (const row of this.iterateCandidateRowsSync(
+      db,
+      ftsQuery || pattern.replace(/\*/g, ''),
+      parsed
+    )) {
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -514,17 +677,24 @@ export class SearchService {
   private fuzzyContentSearch(
     db: SqliteDatabase,
     parsed: ParsedQuery,
-    options: SearchOptions
+    options: SearchOptions,
+    signal?: AbortSignal
   ): SearchHit[] {
     const term = parsed.terms[0] ?? '';
     if (!term || term.includes('*')) {
       return [];
     }
 
-    const rows = this.fetchCandidateRows(db, buildFtsMatch([term.slice(0, 3)], false), parsed, options);
     const hits: SearchHit[] = [];
 
-    for (const row of rows) {
+    for (const row of this.iterateCandidateRowsSync(
+      db,
+      buildFtsMatch([term.slice(0, 3)], false),
+      parsed
+    )) {
+      if (signal?.aborted) {
+        return hits;
+      }
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -558,8 +728,7 @@ export class SearchService {
 
   private buildCandidateQuery(
     ftsQuery: string,
-    parsed: ParsedQuery,
-    options: SearchOptions
+    parsed: ParsedQuery
   ): CandidateQuery {
     const now = Date.now();
 
@@ -567,8 +736,6 @@ export class SearchService {
       let sql = `SELECT path, content, ext, dir, mtime FROM files WHERE 1=1`;
       const params: (string | number)[] = [];
       sql += this.buildMtimeFilter(parsed, now, params);
-      sql += ` LIMIT ?`;
-      params.push(options.maxResults * 10);
       return { kind: 'stmt', sql, params };
     }
 
@@ -580,26 +747,37 @@ export class SearchService {
     `;
     const params: (string | number)[] = [ftsQuery];
     sql += this.buildMtimeFilter(parsed, now, params, 'f');
-    sql += ` LIMIT ?`;
-    params.push(options.maxResults * 10);
     return { kind: 'stmt', sql, params };
   }
 
-  private fetchCandidateRows(
+  private buildFallbackCandidateQuery(parsed: ParsedQuery): CandidateQuery {
+    const params: (string | number)[] = [];
+    let sql = 'SELECT path, content, ext, dir, mtime FROM files WHERE 1=1';
+    sql += this.buildMtimeFilter(parsed, Date.now(), params);
+    return { kind: 'stmt', sql, params };
+  }
+
+  private *iterateCandidateRowsSync(
     db: SqliteDatabase,
     ftsQuery: string,
-    parsed: ParsedQuery,
-    options: SearchOptions
-  ): CandidateRow[] {
-    const query = this.buildCandidateQuery(ftsQuery, parsed, options);
+    parsed: ParsedQuery
+  ): Generator<CandidateRow> {
+    const query = this.buildCandidateQuery(ftsQuery, parsed);
+    const iterateRows = function* (
+      sql: string,
+      params: (string | number)[]
+    ): Generator<CandidateRow> {
+      const stmt = db.prepare(sql);
+      for (const row of stmt.iterate(...params)) {
+        yield row as CandidateRow;
+      }
+    };
 
     try {
-      return db.prepare(query.sql).all(...query.params) as CandidateRow[];
+      yield* iterateRows(query.sql, query.params);
     } catch {
-      const pattern = `%${parsed.terms[0]?.replace(/\*/g, '%') ?? ''}%`;
-      return db
-        .prepare(`SELECT path, content, ext, dir, mtime FROM files WHERE content LIKE ? LIMIT ?`)
-        .all(pattern, options.maxResults * 5) as CandidateRow[];
+      const fallback = this.buildFallbackCandidateQuery(parsed);
+      yield* iterateRows(fallback.sql, fallback.params);
     }
   }
 
@@ -607,10 +785,10 @@ export class SearchService {
     db: SqliteDatabase,
     ftsQuery: string,
     parsed: ParsedQuery,
-    options: SearchOptions
+    signal?: AbortSignal
   ): AsyncGenerator<CandidateRow> {
     const yieldThrottle = new StreamYieldThrottle();
-    const query = this.buildCandidateQuery(ftsQuery, parsed, options);
+    const query = this.buildCandidateQuery(ftsQuery, parsed);
 
     const iterateRows = async function* (
       sql: string,
@@ -619,6 +797,9 @@ export class SearchService {
       const stmt = db.prepare(sql);
       let rowIndex = 0;
       for (const row of stmt.iterate(...params)) {
+        if (signal?.aborted) {
+          return;
+        }
         rowIndex++;
         if (rowIndex === 1) {
           profileMark('search_iterate_first_row', {
@@ -639,11 +820,8 @@ export class SearchService {
     try {
       yield* iterateRows(query.sql, query.params);
     } catch {
-      const pattern = `%${parsed.terms[0]?.replace(/\*/g, '%') ?? ''}%`;
-      yield* iterateRows(
-        `SELECT path, content, ext, dir, mtime FROM files WHERE content LIKE ? LIMIT ?`,
-        [pattern, options.maxResults * 5]
-      );
+      const fallback = this.buildFallbackCandidateQuery(parsed);
+      yield* iterateRows(fallback.sql, fallback.params);
     }
   }
 
@@ -652,8 +830,15 @@ export class SearchService {
     parsed: ParsedQuery,
     caseSensitive: boolean
   ): boolean {
+    let mappedPath = row.path;
+    try {
+      mappedPath = this.mapPath(row.path);
+    } catch {
+      // Path mappings are a compatibility aid; a broken mapper must not make
+      // the underlying indexed path unsearchable.
+    }
     return (
-      pathMatchesFilter(row.path, row.ext, row.dir, parsed.filters) &&
+      pathMatchesFilter(row.path, row.ext, row.dir, parsed.filters, mappedPath) &&
       contentMatchesFilter(row.content, parsed.filters, caseSensitive)
     );
   }
@@ -665,23 +850,10 @@ export class SearchService {
     start: number,
     partialIndex: boolean
   ): SearchResult {
-    const now = Date.now();
-    let sql = `SELECT path, content, ext, dir, mtime FROM files WHERE 1=1`;
-    const params: (string | number)[] = [];
-    sql += this.buildMtimeFilter(parsed, now, params);
-
-    const rows = db.prepare(sql).all(...params) as Array<{
-      path: string;
-      content: string;
-      ext: string;
-      dir: string;
-      mtime: number;
-    }>;
-
     const hits: SearchHit[] = [];
     const seenFiles = new Set<string>();
 
-    for (const row of rows) {
+    for (const row of this.iterateCandidateRowsSync(db, '', parsed)) {
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -724,13 +896,12 @@ export class SearchService {
     parsed: ParsedQuery,
     options: SearchOptions
   ): SearchHit[] {
-    const rows = this.fetchCandidateRows(db, ftsQuery, parsed, options);
     const hits: SearchHit[] = [];
     const searchTerms = parsed.terms.flatMap((t) =>
       parsed.phrase && !parsed.multiWildcard ? [t] : t.split(/\s+/).filter(Boolean)
     );
 
-    for (const row of rows) {
+    for (const row of this.iterateCandidateRowsSync(db, ftsQuery, parsed)) {
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -752,6 +923,116 @@ export class SearchService {
     }
 
     return hits.slice(0, options.maxResults);
+  }
+
+  private compileRegex(pattern: string, caseSensitive: boolean): RegExp {
+    try {
+      return new RegExp(pattern, caseSensitive ? 'g' : 'gi');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        message.toLowerCase().includes('invalid regular expression')
+          ? message
+          : `Invalid regular expression: ${message}`
+      );
+    }
+  }
+
+  private findRegexHits(
+    filePath: string,
+    content: string,
+    regex: RegExp,
+    contextLines: number,
+    maxResults: number
+  ): SearchHit[] {
+    if (maxResults <= 0) {
+      return [];
+    }
+
+    const hits: SearchHit[] = [];
+    const lines = content.split(/\r?\n/);
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const line = lines[lineIndex];
+      regex.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(line)) !== null) {
+        hits.push(
+          this.makeHit(
+            filePath,
+            lines,
+            lineIndex,
+            match.index,
+            match.index + match[0].length,
+            contextLines
+          )
+        );
+        if (hits.length >= maxResults) {
+          return hits;
+        }
+        if (match[0].length === 0) {
+          regex.lastIndex = match.index + 1;
+        }
+      }
+    }
+    return hits;
+  }
+
+  private async *iterateRegexHitsStreaming(
+    filePath: string,
+    content: string,
+    regex: RegExp,
+    contextLines: number,
+    maxResults: number,
+    signal?: AbortSignal
+  ): AsyncGenerator<SearchHit> {
+    if (maxResults <= 0 || signal?.aborted) {
+      return;
+    }
+
+    const lines = content.split(/\r?\n/);
+    const yieldThrottle = new StreamYieldThrottle();
+    let hitCount = 0;
+    let workSinceYield = 0;
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      if (signal?.aborted) {
+        return;
+      }
+
+      const line = lines[lineIndex];
+      regex.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(line)) !== null) {
+        yield this.makeHit(
+          filePath,
+          lines,
+          lineIndex,
+          match.index,
+          match.index + match[0].length,
+          contextLines
+        );
+        hitCount++;
+        if (hitCount >= maxResults || signal?.aborted) {
+          return;
+        }
+        if (match[0].length === 0) {
+          regex.lastIndex = match.index + 1;
+        }
+        if (++workSinceYield >= 64) {
+          workSinceYield = 0;
+          await yieldThrottle.maybeYield();
+          if (signal?.aborted) {
+            return;
+          }
+        }
+      }
+      if (++workSinceYield >= 64) {
+        workSinceYield = 0;
+        await yieldThrottle.maybeYield();
+        if (signal?.aborted) {
+          return;
+        }
+      }
+    }
   }
 
   private findHitsInContent(

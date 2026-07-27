@@ -47,6 +47,7 @@ By default the server exposes only indexes whose mapped output roots are fully c
 - `indexId`: index ID or a unique index name. Prefer the ID.
 - `caseSensitive` (default `false`): set `true` for exact case.
 - `phraseSearch` (default `true`): adjacent multi-word phrase matching. Set `false` to search separate terms. A leading quoted query such as `"request animation frame"` forces phrase mode.
+- `regex` (default `false`): treat the raw query pattern as a per-line ECMAScript regular expression. Do not add `/.../flags`; `caseSensitive` controls case. Phrase/fuzzy/loose settings are ignored in this mode.
 - `fuzzy` (default `false`): typo-tolerant identifier-word matching using Levenshtein distance. Maximum edit distance is 0 for length 1–3, 1 for length 4–6, and 2 for length 7+.
 - `loose` (default `false`): match all query terms as identifier tokens in any order within `looseGap`.
 - `looseGap` (default `10`, range 1–500): maximum token span for loose matching. It matters only with `loose: true` or a `loose:` query.
@@ -70,10 +71,13 @@ There is no dedicated `wholeWord` MCP parameter.
 - Loose phrase in query text: `loose:"foo bar"`; custom gap: `loose25:"foo bar"`.
 - Required content substring: `+"must appear"` or `+token`.
 - Excluded content substring: `-"must not appear"` or `-token`.
-- Path filters: `ext:ts`, `file:*Service.ts`, `dir:src/search`.
-- Negated path filters: `-ext:test`, `-file:*.map`, `-dir:node_modules`.
+- Filters must be standalone whitespace-delimited tokens outside quotes. Same-kind includes use OR, different kinds use AND, and any matching exclusion wins.
+- Extension lists: `ext:h,cpp,inc`; negated lists: `-ext:bak,tmp`.
+- Path filters: `file:*Service.ts`, `dir:src/**`. Case-insensitive standard Glob applies with normalized path separators: `*` stays within one path segment, `**` crosses directories, and `?` matches one character.
+- Negated path filters: `-file:*.map`, `-dir:**/node_modules/**`.
 - Age filters: `age:7d` means modified within seven days; `-age:7d` means older than seven days.
-- Filters can be combined: `requestAnimationFrame ext:ts dir:src -file:*.test.ts`.
+- Filters can be combined: `requestAnimationFrame ext:ts,tsx dir:src/** -file:*.test.ts`.
+- Regex mode: pass `regex: true` with a raw per-line pattern, for example `^class\s+\w+ ext:h,cpp -dir:**/Generated/**`. Only a consecutive suffix of `ext:` / `file:` / `dir:` / `age:` tokens is parsed as filters. Regex matching does not span lines and may be slower than indexed text search.
 
 ## Choosing modes
 
@@ -82,6 +86,7 @@ There is no dedicated `wholeWord` MCP parameter.
 - Misspelling or uncertain symbol spelling: `fuzzy: true`.
 - Terms near each other but not adjacent or not ordered: `loose: true`, then increase `looseGap` only if needed.
 - Partial identifier: use `*`; do not enable fuzzy unless typo tolerance is also required.
+- Structural line pattern: set `regex: true`; keep filters at the end of the query and prefer `ext:` / `dir:` constraints on large indexes.
 - Too many results: add `indexId`, `ext:`, `dir:`, or `file:` before increasing `maxResults`.
 - No results for punctuation: split punctuation into spaces before concluding the code is absent.
 

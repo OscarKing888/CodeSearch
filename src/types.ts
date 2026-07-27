@@ -69,6 +69,7 @@ export interface SearchOptions {
   fuzzy: boolean;
   loose: boolean;
   looseGap: number;
+  regex?: boolean;
 }
 
 export interface FileRecord {

@@ -41,6 +41,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   private panelWebviewFocused = false;
   private autocompleteSeq = 0;
   private searchSeq = 0;
+  private searchAbortController: AbortController | undefined;
   private readonly partialAckController = new ResultsPartialAckController();
   private readonly profileSessions = new Map<number, SearchProfileSession>();
   private readonly profileFinalizations = new Map<number, Promise<string | undefined>>();
@@ -106,6 +107,8 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
   async disposeActiveSearches(): Promise<void> {
     this.searchSeq++;
+    this.searchAbortController?.abort();
+    this.searchAbortController = undefined;
     this.partialAckController.cancelActive();
     await Promise.all([
       this.finalizeAllProfiles('disposed'),
@@ -147,6 +150,8 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       this.panelVisible = false;
       this.panelWebviewFocused = false;
       this.searchSeq++;
+      this.searchAbortController?.abort();
+      this.searchAbortController = undefined;
       this.partialAckController.cancelActive();
       this.resolveWebviewReadyWaiters();
       this.updatePanelFocusContext();
@@ -177,8 +182,12 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
             msg.tabId,
             msg.newTab,
             msg.showContext,
-            msg.contextLines
+            msg.contextLines,
+            msg.regex
           );
+          break;
+        case 'cancelSearch':
+          this.cancelCurrentSearch();
           break;
         case 'saveSecondaries':
           await this.context.workspaceState.update(
@@ -187,7 +196,10 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
           );
           break;
         case 'autocomplete':
-          this.handleAutocomplete(msg.prefix ?? '');
+          this.handleAutocomplete(msg.prefix ?? '', msg.requestId);
+          break;
+        case 'cancelAutocomplete':
+          this.autocompleteSeq++;
           break;
         case 'openFile':
           if (msg.path) {
@@ -354,9 +366,13 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     tabId?: string,
     _newTab?: boolean,
     showContext?: boolean,
-    contextLines?: number
+    contextLines?: number,
+    regex?: boolean
   ): Promise<MultiSearchResult | undefined> {
     const seq = ++this.searchSeq;
+    this.searchAbortController?.abort();
+    const searchAbortController = new AbortController();
+    this.searchAbortController = searchAbortController;
     this.partialAckController.cancelActive();
     const config = getConfig();
     const effectiveContextLines = contextLines ?? this.getUiContextLines();
@@ -368,6 +384,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       fuzzy: fuzzy ?? config.fuzzySearchDefault,
       loose: loose ?? false,
       looseGap: config.looseGapDefault,
+      regex: regex ?? false,
     };
 
     const profileSession = config.profileSearch
@@ -413,14 +430,20 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
     const produce = async () => {
       try {
-        for await (const batch of this.searchService.searchStreaming(query, searchOptions)) {
+        for await (const batch of this.searchService.searchStreaming(
+          query,
+          searchOptions,
+          searchAbortController.signal
+        )) {
           if (seq !== this.searchSeq) {
             return;
           }
           queue.push(batch);
         }
       } catch (error) {
-        producerError = error;
+        if (!searchAbortController.signal.aborted) {
+          producerError = error;
+        }
       } finally {
         searchDone = true;
         profileSession?.mark('provider_search_producer_done', {
@@ -596,6 +619,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       profileSession?.mark('provider_search_failed', { message });
       const wasCurrentSearch = seq === this.searchSeq;
       if (wasCurrentSearch) {
+        searchAbortController.abort();
         this.postMessage({ type: 'searchFailed', searchId: seq, tabId, message });
         this.searchSeq++;
         this.partialAckController.cancelActive();
@@ -643,6 +667,14 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     }
 
     return finalResult;
+  }
+
+  private cancelCurrentSearch(): void {
+    const currentSearchId = ++this.searchSeq;
+    this.searchAbortController?.abort();
+    this.searchAbortController = undefined;
+    this.partialAckController.cancelActive();
+    void this.finalizeSupersededProfiles(currentSearchId);
   }
 
   nextHit(): void {
@@ -839,7 +871,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  private handleAutocomplete(prefix: string): void {
+  private handleAutocomplete(prefix: string, requestId?: number): void {
     const seq = ++this.autocompleteSeq;
     setImmediate(() => {
       if (seq !== this.autocompleteSeq) {
@@ -849,7 +881,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       if (seq !== this.autocompleteSeq) {
         return;
       }
-      this.postMessage({ type: 'autocomplete', prefix, suggestions });
+      this.postMessage({ type: 'autocomplete', prefix, requestId, suggestions });
     });
   }
 
@@ -1096,6 +1128,86 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     .btn.active {
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
+    }
+    .regex-split {
+      position: relative;
+      display: inline-flex;
+      align-items: stretch;
+      flex-shrink: 0;
+    }
+    .regex-split > .btn:first-child {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+    .regex-split > .btn-menu {
+      min-width: 18px;
+      padding: 4px 3px;
+      border-left: 1px solid var(--vscode-button-border, rgba(127, 127, 127, 0.35));
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+    }
+    .regex-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      z-index: 50;
+      display: none;
+      width: 250px;
+      max-height: min(440px, calc(100vh - 70px));
+      overflow-y: auto;
+      padding: 4px 0;
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border);
+      border-radius: 3px;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+    }
+    .regex-menu.visible {
+      display: block;
+    }
+    .regex-menu-group + .regex-menu-group {
+      margin-top: 3px;
+      padding-top: 3px;
+      border-top: 1px solid var(--vscode-menu-separatorBackground, rgba(127, 127, 127, 0.25));
+    }
+    .regex-menu-group-label {
+      padding: 3px 10px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .regex-menu-item {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 4px 10px;
+      color: var(--vscode-menu-foreground, var(--vscode-foreground));
+      background: transparent;
+      border: none;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .regex-menu-item:hover,
+    .regex-menu-item:focus {
+      color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground));
+      background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground));
+      outline: none;
+    }
+    .regex-menu-item code {
+      color: inherit;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .regex-menu-item span {
+      overflow: hidden;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .btn-icon {
       display: block;
@@ -1391,10 +1503,15 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       <input type="text" class="search-input" id="searchInput" placeholder="Search... loose:&quot;A B&quot; ext:ts +"only this"" spellcheck="false" autocomplete="off" />
       <div class="autocomplete" id="autocomplete"></div>
     </div>
-    <button class="btn" id="btnCase" title="Case sensitive">Aa</button>
-    <button class="btn active" id="btnPhrase" title="Phrase search">""</button>
-    <button class="btn" id="btnFuzzy" title="Fuzzy search">Fz</button>
-    <button class="btn" id="btnLoose" title="Loose phrase search">~</button>
+    <button class="btn" id="btnCase" title="Case sensitive" aria-label="Case sensitive" aria-pressed="false">Aa</button>
+    <button class="btn active" id="btnPhrase" title="Phrase search" aria-label="Phrase search" aria-pressed="true">""</button>
+    <button class="btn" id="btnFuzzy" title="Fuzzy search" aria-label="Fuzzy search" aria-pressed="false">Fz</button>
+    <button class="btn" id="btnLoose" title="Loose phrase search" aria-label="Loose phrase search" aria-pressed="false">~</button>
+    <span class="regex-split" id="regexSplit" role="group" aria-label="Regular expression search">
+      <button class="btn" id="btnRegex" type="button" title="Use regular expression" aria-label="Use regular expression" aria-pressed="false">.*</button>
+      <button class="btn btn-menu" id="btnRegexMenu" type="button" title="Insert regular expression" aria-label="Insert regular expression" aria-haspopup="menu" aria-controls="regexSnippetMenu" aria-expanded="false">▾</button>
+      <div class="regex-menu" id="regexSnippetMenu" role="menu" aria-label="Regular expression snippets" aria-hidden="true" hidden></div>
+    </span>
     <span class="ctx-lines-wrap">
       <button class="btn btn-narrow" id="btnCtxLess" title="Fewer context lines (0-10)">−</button>
       <button class="btn btn-with-count" id="btnContext" title="Show context lines" aria-label="Show context lines">

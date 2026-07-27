@@ -6,6 +6,7 @@ All notable changes to the Ace Code Search extension are documented in this file
 
 ### Added
 
+- Per-line ECMAScript regex search in the panel and MCP, with an accessible `.*` snippet menu that inserts at the current caret or selection
 - Cross-IDE shared workspace Primary indexes, auto-discovered matching indexes, manual Primary selection, and path-based bindings
 - Single-writer leases with read-only fallback/takeover, writer status display, and safe deletion of Available indexes
 - Redesigned Manage Indexes: dominant Primary, subordinate Secondaries, unified property panel, and visible Unreal default excludes
@@ -15,6 +16,7 @@ All notable changes to the Ace Code Search extension are documented in this file
 
 ### Fixed
 
+- `ext:h,cpp,inc`, safe `file:` / `dir:` standard globs, standalone quote-aware filter parsing, mapped-path filtering, and false negatives caused by truncating candidates before post-filters
 - Cursor/Windows MCP roots compatibility, scope refresh after roots changes, fail-closed on invalid roots
 - Cursor zero-tool snapshot recovery; local packages include Cursor helper Node ABI; MCP launcher and legacy entrypoints re-exec to compatible Node 20/22/24 when PATH Node ABI mismatches packaged `native-node/` (for example Node 23), preserving script arguments across macOS/Linux/Windows
 - Primary switching and registry / writer lock races; macOS install target detection when PATH `code` is Cursor's shim
@@ -27,6 +29,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Minimum VS Code **1.103**; Codex/Cursor MCP launcher auto-selects compatible Node 20/22/24 (`ACE_CODE_SEARCH_NODE` override supported)
 - Streaming search shows loaded vs. discovered hit counts; `codeSearch.profileSearch` off by default
 - Fail-closed migration for managed legacy Skill/rule/config; MCP feature-parity maintenance rule
+
+## [0.8.11] - 2026-07-27
+
+### Changed
+- Add regx search, fix filters
 
 ## [0.8.10] - 2026-07-26
 

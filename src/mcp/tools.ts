@@ -122,6 +122,7 @@ export interface SearchCodeArgs {
   indexId?: string;
   caseSensitive?: boolean;
   phraseSearch?: boolean;
+  regex?: boolean;
   contextLines?: number;
   maxResults?: number;
   fuzzy?: boolean;
@@ -225,6 +226,7 @@ export class McpToolHandlers {
       const options = mergeSearchOptions({
         caseSensitive: args.caseSensitive,
         phraseSearch: args.phraseSearch,
+        regex: args.regex,
         contextLines: args.contextLines,
         maxResults: args.maxResults,
         fuzzy: args.fuzzy,

@@ -240,12 +240,18 @@ async function main(): Promise<void> {
     {
       title: 'Search Code',
       description:
-        'Full-text search over Ace Code Search indexes. Supports the same query syntax as the extension (ext:/dir:/age:/loose:, phrases, wildcards). Returns indexed snapshot hits with mapped localPath.',
+        'Search Ace Code Search index snapshots with text or per-line ECMAScript regular expressions. Path filters include ext:h,cpp,inc, file:*Service.ts, dir:src/**, and -ext: / -file: / -dir: exclusions; age:, loose:, phrases, and identifier wildcards are also supported. Returns hits with mapped localPath.',
       inputSchema: {
         query: z.string().describe('Search query (Ace Code Search syntax)'),
         indexId: z.string().optional().describe('Limit to one index id or unique name'),
         caseSensitive: z.boolean().optional().describe('Case-sensitive match (default false)'),
         phraseSearch: z.boolean().optional().describe('Treat multi-word as phrase (default true)'),
+        regex: z
+          .boolean()
+          .optional()
+          .describe(
+            'Treat query as a per-line ECMAScript regular expression (default false); trailing ext:/file:/dir:/age: filters remain supported, while phrase/fuzzy/loose options are ignored'
+          ),
         contextLines: z.number().int().min(0).max(10).optional(),
         maxResults: z.number().int().min(1).max(10000).optional(),
         fuzzy: z.boolean().optional(),

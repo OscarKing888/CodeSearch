@@ -61,7 +61,7 @@ npm run mcp -- --all-indexes
 | `find_header_source` | 使用索引查找 C/C++ 头文件/源文件配对 |
 | `search_class_hierarchy` | 返回指定类的子类继承 DAG 与代码位置 |
 
-`search_code` 主要参数：`caseSensitive`、`phraseSearch`、`fuzzy`、`loose` + `looseGap`、`contextLines`、`maxResults`；查询语法支持 `ext:`、`file:`、`dir:`、`age:`、`+/-` 内容过滤及 `*` 通配符。无独立严格 `wholeWord` 参数；含连字符等标点的名称可按 tokenizer 拆词搜索（如 `better sqlite3` 搜 `better-sqlite3`）。
+`search_code` 主要参数：`caseSensitive`、`phraseSearch`、`regex`、`fuzzy`、`loose` + `looseGap`、`contextLines`、`maxResults`。`regex: true` 使用逐行 ECMAScript 正则；查询末尾连续的路径/时间过滤器仍有效，但 Phrase/Fuzzy/Loose 被忽略。查询语法支持 `ext:`、`file:`、`dir:`、`age:`、`+/-` 内容过滤及通配符。无独立严格 `wholeWord` 参数；含连字符等标点的名称可按 tokenizer 拆词搜索（如 `better sqlite3` 搜 `better-sqlite3`）。
 
 `search_class_hierarchy` 大小写敏感；限定名唯一定位，同名短类名返回候选。`maxNodes` 为 1–5000 或 `"all"`，省略时读用户设置 `codeSearch.mcpClassHierarchyDefaultMaxNodes`（默认 20，0 表示全部）。MCP 只读，不写数据库或 registry；Primary/Secondary 与 writer lease 为编辑器侧操作。
 
@@ -376,10 +376,10 @@ Manual smoke test: open the same workspace in VS Code and Cursor, select the sha
 | | Ace Code Search CLI | ✅ |
 | **AI Agent** | 只读 MCP（搜索 / 读文件 / 类层次 / 头源配对） | ✅ |
 | | Skill 与 MCP 状态栏 | ✅ |
-| **搜索** | 单词 / 短语 / 模糊 / Loose / 通配符 / 仅过滤 | ✅ |
+| **搜索** | 单词 / 短语 / 模糊 / Loose / 通配符 / 逐行正则 / 仅过滤 | ✅ |
 | | 大小写 / 短语默认 / 上下文行 | ✅ |
 | **过滤** | `ext:` / `file:` / `dir:` / `age:` / `+/-` | ✅ |
-| **结果 UI** | 底部面板 / 多标签 / 锁定 / 排序 / 自动补全 | ✅ |
+| **结果 UI** | 底部面板 / 多标签 / 锁定 / 排序 / 自动补全 / 正则字符菜单 | ✅ |
 | | 语法高亮 | 🟡 规则高亮 |
 | | C++ 类继承树 | ✅ |
 | **导航** | Alt+= 搜索选区 / 命中跳转 / Shift+Alt+F | ✅ |
@@ -526,22 +526,26 @@ CREATE TABLE tokens (
 解析用户输入为结构化对象：
 
 ```
-输入: myVar ext:cpp dir:utils -file:ChangeLog age:2h
-输出: { terms: ["myVar"], filters: { ext: ["cpp"], dir: ["utils"], fileExclude: ["ChangeLog"], ageMax: "2h" } }
+输入: myVar ext:h,cpp,inc dir:src/** -file:*.test.* age:2h
+输出: { terms: ["myVar"], filters: { ext: ["h", "cpp", "inc"], dir: ["src/**"], fileExclude: ["*.test.*"], ageMax: "2h" } }
 ```
 
 - **FTS5 查询**: 单词/短语直接转 FTS5 MATCH 语法
-- **通配符**: 单词级 `*` 转 FTS5 prefix query（`token*`）；行内/跨行通配符由 `WildcardMatcher` 后处理
+- **过滤器 token**: 仅识别引号外、由空白分隔的独立过滤器；同类 include 为 OR、不同类别为 AND、exclude 优先
+- **路径 Glob**: `file:` / `dir:` 使用不区分大小写的标准 Glob，统一路径分隔符；`*` 不跨目录、`**` 跨目录、`?` 匹配单字符；`ext:` 支持逗号列表
+- **内容通配符**: 单词级 `*` 转 FTS5 prefix query（`token*`）；行内/跨行通配符由 `WildcardMatcher` 后处理
 - **age 过滤**: SQL `WHERE mtime > ?` 与 FTS 结果 JOIN
-- **ext/dir/file 过滤**: 对 `files` 表路径匹配（glob）
+- **ext/dir/file 过滤**: 同时匹配索引原始路径与目录映射后的本地路径
 - **仅过滤**: 无搜索词时直接 SELECT files 表
+- **正则**: 原始 ECMAScript pattern 逐行匹配，不写 `/.../flags`；仅解析末尾连续的路径/时间过滤器，不支持跨行，且大型索引上可能比 FTS 慢
+- **候选遍历**: 路径/内容后过滤前不截断候选；同步与流式搜索都懒遍历到实际命中上限
 
 ### 搜索面板 UI
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ [搜索框: myVar ext:cpp]  [Aa] [""]  [⟳]  [⚙]              │
-│  Case  Phrase  Refresh  Settings                            │
+│ [搜索框: myVar ext:cpp]  [Aa] [""] [Fz] [~] [.* ▾] [⟳]    │
+│  Case  Phrase Fuzzy Loose Regex/Menu Refresh                │
 ├─────────────────────────────────────────────────────────────┤
 │ 1,234 hits in 56 files · 0.08s          Indexing: 42% ████░ │
 ├─────────────────────────────────────────────────────────────┤

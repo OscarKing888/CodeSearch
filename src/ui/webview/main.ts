@@ -1,3 +1,11 @@
+import { highlightQuery } from '../../search/QueryParser';
+import {
+  createRegexSnippetEdit,
+  REGEX_SNIPPET_GROUPS,
+  REGEX_SNIPPETS,
+  type RegexSnippet,
+} from '../regexSnippets';
+
 declare function acquireVsCodeApi(): {
   postMessage(msg: unknown): void;
   getState(): unknown;
@@ -104,6 +112,10 @@ const btnCase = document.getElementById('btnCase') as HTMLButtonElement;
 const btnPhrase = document.getElementById('btnPhrase') as HTMLButtonElement;
 const btnFuzzy = document.getElementById('btnFuzzy') as HTMLButtonElement;
 const btnLoose = document.getElementById('btnLoose') as HTMLButtonElement;
+const regexSplit = document.getElementById('regexSplit') as HTMLSpanElement;
+const btnRegex = document.getElementById('btnRegex') as HTMLButtonElement;
+const btnRegexMenu = document.getElementById('btnRegexMenu') as HTMLButtonElement;
+const regexSnippetMenu = document.getElementById('regexSnippetMenu') as HTMLDivElement;
 const btnContext = document.getElementById('btnContext') as HTMLButtonElement;
 const contextLineCount = document.getElementById('contextLineCount') as HTMLSpanElement;
 const btnCtxLess = document.getElementById('btnCtxLess') as HTMLButtonElement;
@@ -126,9 +138,13 @@ let caseSensitive = false;
 let phraseSearch = true;
 let fuzzy = false;
 let loose = false;
+let regexMode = false;
 let acTimer: ReturnType<typeof setTimeout> | undefined;
 let suggestions: Suggestion[] = [];
 let acActiveIndex = -1;
+let autocompleteRequestSeq = 0;
+let pendingAutocompleteRequestId = 0;
+let savedSearchSelection = { start: 0, end: 0 };
 let configContextLines = 1;
 let extensionVersion = '';
 let profileSearchEnabled = false;
@@ -136,6 +152,8 @@ let profileSearchStartMs = 0;
 let profileFirstResultsSearchId: number | undefined;
 let activeProfileSearchId: number | undefined;
 let latestSearchId = 0;
+let suppressSearchMessages = false;
+const ignoredSearchIds = new Set<number>();
 
 let pendingAppend: PendingAppend | undefined;
 let pendingAppendFrame: number | undefined;
@@ -510,7 +528,7 @@ function changeContextLines(next: number): void {
   if (!tab) {
     return;
   }
-  const needsRescan = tab.showContext && tab.query.trim().length > 0;
+  const needsRescan = tab.showContext && hasSearchableQuery(tab.query);
   if (needsRescan) {
     doSearch(false);
   } else if (tab.results) {
@@ -521,6 +539,7 @@ function changeContextLines(next: number): void {
 function switchTab(id: string): void {
   discardPendingAppend(true);
   hideResultContextMenu();
+  closeRegexSnippetMenu();
   const prev = getActiveTab();
   if (prev) {
     prev.query = searchInput.value;
@@ -571,6 +590,7 @@ function closeTab(id: string): void {
 function newTab(query = ''): Tab {
   discardPendingAppend(true);
   hideResultContextMenu();
+  closeRegexSnippetMenu();
   const tab = createTab(query);
   activeTabId = tab.id;
   searchInput.value = query;
@@ -597,21 +617,168 @@ function findTargetTab(forNewTab: boolean): Tab {
   return active;
 }
 
-btnNewTab.addEventListener('click', () => {
-  newTab('');
-  searchInput.focus();
-});
-
-searchInput.addEventListener('input', () => {
+function syncQueryDraft(): void {
   const tab = getActiveTab();
   if (tab && !tab.locked) {
     tab.query = searchInput.value;
     tab.label = searchInput.value.slice(0, 20) || tab.label;
     renderTabs();
   }
+}
+
+function syncModeButtons(): void {
+  btnCase.classList.toggle('active', caseSensitive);
+  btnCase.setAttribute('aria-pressed', String(caseSensitive));
+  btnPhrase.classList.toggle('active', phraseSearch);
+  btnPhrase.setAttribute('aria-pressed', String(phraseSearch));
+  btnFuzzy.classList.toggle('active', fuzzy);
+  btnFuzzy.setAttribute('aria-pressed', String(fuzzy));
+  btnLoose.classList.toggle('active', loose);
+  btnLoose.setAttribute('aria-pressed', String(loose));
+  btnRegex.classList.toggle('active', regexMode);
+  btnRegex.setAttribute('aria-pressed', String(regexMode));
+
+  for (const button of [btnPhrase, btnFuzzy, btnLoose]) {
+    button.disabled = regexMode;
+    button.setAttribute('aria-disabled', String(regexMode));
+  }
+}
+
+function setRegexMode(enabled: boolean, rerun: boolean): void {
+  const changed = regexMode !== enabled;
+  regexMode = enabled;
+  syncModeButtons();
+  if (regexMode) {
+    hideAutocomplete();
+    vscode.postMessage({ type: 'cancelAutocomplete' });
+  }
+  updateQueryHighlight();
+  if (changed && rerun) {
+    doSearch(false);
+  }
+}
+
+function saveSearchInputSelection(): void {
+  const length = searchInput.value.length;
+  savedSearchSelection = {
+    start: Math.max(0, Math.min(length, searchInput.selectionStart ?? length)),
+    end: Math.max(0, Math.min(length, searchInput.selectionEnd ?? length)),
+  };
+}
+
+function getRegexMenuItems(): HTMLButtonElement[] {
+  return Array.from(
+    regexSnippetMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+  );
+}
+
+function openRegexSnippetMenu(focusFirstItem = false): void {
+  if (document.activeElement === searchInput) {
+    saveSearchInputSelection();
+  }
+  hideAutocomplete();
+  regexSnippetMenu.hidden = false;
+  regexSnippetMenu.classList.add('visible');
+  btnRegexMenu.setAttribute('aria-expanded', 'true');
+  regexSnippetMenu.setAttribute('aria-hidden', 'false');
+  if (focusFirstItem) {
+    getRegexMenuItems()[0]?.focus();
+  }
+}
+
+function closeRegexSnippetMenu(restoreMenuButtonFocus = false): void {
+  if (regexSnippetMenu.hidden) {
+    return;
+  }
+  regexSnippetMenu.classList.remove('visible');
+  regexSnippetMenu.hidden = true;
+  btnRegexMenu.setAttribute('aria-expanded', 'false');
+  regexSnippetMenu.setAttribute('aria-hidden', 'true');
+  if (restoreMenuButtonFocus) {
+    btnRegexMenu.focus();
+  }
+}
+
+function toggleRegexSnippetMenu(focusFirstItem = false): void {
+  if (regexSnippetMenu.hidden) {
+    openRegexSnippetMenu(focusFirstItem);
+  } else {
+    closeRegexSnippetMenu();
+  }
+}
+
+function insertRegexSnippet(snippet: RegexSnippet): void {
+  const edit = createRegexSnippetEdit(
+    searchInput.value,
+    savedSearchSelection.start,
+    savedSearchSelection.end,
+    snippet
+  );
+
+  if (!regexMode) {
+    setRegexMode(true, false);
+  }
+  searchInput.setRangeText(edit.replacement, edit.rangeStart, edit.rangeEnd, 'end');
+  searchInput.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+  savedSearchSelection = { start: edit.selectionStart, end: edit.selectionEnd };
+  syncQueryDraft();
+  updateQueryHighlight();
+  hideAutocomplete();
+  closeRegexSnippetMenu();
+  searchInput.focus();
+}
+
+function renderRegexSnippetMenu(): void {
+  regexSnippetMenu.textContent = '';
+  for (const group of REGEX_SNIPPET_GROUPS) {
+    const groupEl = document.createElement('div');
+    const label = document.createElement('div');
+    const labelId = `regexSnippetGroup-${group.id}`;
+    groupEl.className = 'regex-menu-group';
+    groupEl.setAttribute('role', 'group');
+    groupEl.setAttribute('aria-labelledby', labelId);
+    label.className = 'regex-menu-group-label';
+    label.id = labelId;
+    label.textContent = group.label;
+    groupEl.appendChild(label);
+
+    for (const snippet of REGEX_SNIPPETS.filter((candidate) => candidate.group === group.id)) {
+      const item = document.createElement('button');
+      const syntax = document.createElement('code');
+      const description = document.createElement('span');
+      item.type = 'button';
+      item.className = 'regex-menu-item';
+      item.setAttribute('role', 'menuitem');
+      item.tabIndex = -1;
+      item.title = snippet.description;
+      syntax.textContent = snippet.label;
+      description.textContent = snippet.description;
+      item.append(syntax, description);
+      item.addEventListener('pointerdown', (event) => event.preventDefault());
+      item.addEventListener('click', (event) => {
+        event.stopPropagation();
+        insertRegexSnippet(snippet);
+      });
+      groupEl.appendChild(item);
+    }
+    regexSnippetMenu.appendChild(groupEl);
+  }
+}
+
+btnNewTab.addEventListener('click', () => {
+  newTab('');
+  searchInput.focus();
+});
+
+searchInput.addEventListener('input', () => {
+  syncQueryDraft();
+  saveSearchInputSelection();
   updateQueryHighlight();
   requestAutocomplete();
 });
+searchInput.addEventListener('select', saveSearchInputSelection);
+searchInput.addEventListener('pointerup', saveSearchInputSelection);
+searchInput.addEventListener('keyup', saveSearchInputSelection);
 
 searchInput.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key === 'Enter') {
@@ -663,26 +830,82 @@ searchInput.addEventListener('blur', () => {
 
 btnCase.addEventListener('click', () => {
   caseSensitive = !caseSensitive;
-  btnCase.classList.toggle('active', caseSensitive);
+  syncModeButtons();
   doSearch(false);
 });
 
 btnPhrase.addEventListener('click', () => {
   phraseSearch = !phraseSearch;
-  btnPhrase.classList.toggle('active', phraseSearch);
+  syncModeButtons();
   doSearch(false);
 });
 
 btnFuzzy.addEventListener('click', () => {
   fuzzy = !fuzzy;
-  btnFuzzy.classList.toggle('active', fuzzy);
+  syncModeButtons();
   doSearch(false);
 });
 
 btnLoose.addEventListener('click', () => {
   loose = !loose;
-  btnLoose.classList.toggle('active', loose);
+  syncModeButtons();
   doSearch(false);
+});
+
+btnRegex.addEventListener('click', () => {
+  closeRegexSnippetMenu();
+  setRegexMode(!regexMode, true);
+});
+
+btnRegexMenu.addEventListener('pointerdown', saveSearchInputSelection);
+btnRegexMenu.addEventListener('click', (event) => {
+  event.stopPropagation();
+  toggleRegexSnippetMenu(event.detail === 0);
+});
+btnRegexMenu.addEventListener('keydown', (event) => {
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    openRegexSnippetMenu(true);
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    openRegexSnippetMenu();
+    const items = getRegexMenuItems();
+    items[items.length - 1]?.focus();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeRegexSnippetMenu();
+  }
+});
+
+regexSnippetMenu.addEventListener('keydown', (event) => {
+  const items = getRegexMenuItems();
+  const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+  let nextIndex: number | undefined;
+  if (event.key === 'ArrowDown') {
+    nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+  } else if (event.key === 'ArrowUp') {
+    nextIndex =
+      currentIndex < 0
+        ? items.length - 1
+        : (currentIndex - 1 + items.length) % items.length;
+  } else if (event.key === 'Home') {
+    nextIndex = 0;
+  } else if (event.key === 'End') {
+    nextIndex = items.length - 1;
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeRegexSnippetMenu(true);
+    return;
+  } else if (event.key === 'Tab') {
+    event.preventDefault();
+    closeRegexSnippetMenu();
+    (event.shiftKey ? btnRegexMenu : btnContext).focus();
+    return;
+  }
+  if (nextIndex !== undefined) {
+    event.preventDefault();
+    items[nextIndex]?.focus();
+  }
 });
 
 btnContext.addEventListener('click', () => {
@@ -698,7 +921,7 @@ btnContext.addEventListener('click', () => {
       (h) => h.contextBefore.length > 0 || h.contextAfter.length > 0
     ) === false &&
     configContextLines > 0;
-  if (needsRescan && tab.query.trim()) {
+  if (needsRescan && hasSearchableQuery(tab.query)) {
     doSearch(false);
   } else if (tab.results) {
     renderResults(tab.results, tab.selectedIndex);
@@ -724,17 +947,30 @@ function doSearch(forceNewTab: boolean): void {
     return;
   }
 
-  const query = searchInput.value.trim();
+  const query = regexMode ? searchInput.value : searchInput.value.trim();
   tab.query = query;
   tab.label = query.slice(0, 24) || tab.label;
   renderTabs();
 
   if (!query) {
+    suppressSearchMessages = true;
+    discardPendingAppend(true);
+    for (const candidate of tabs) {
+      candidate.searching = false;
+      if (candidate.activeSearchId !== undefined) {
+        ignoredSearchIds.add(candidate.activeSearchId);
+      }
+    }
+    tab.results = undefined;
+    tab.selectedIndex = -1;
+    activeProfileSearchId = undefined;
+    vscode.postMessage({ type: 'cancelSearch' });
     resultsEl.innerHTML = '<div class="empty">Enter a search query</div>';
     setStatusReady();
     return;
   }
 
+  suppressSearchMessages = false;
   vscode.postMessage({
     type: 'search',
     query,
@@ -742,6 +978,7 @@ function doSearch(forceNewTab: boolean): void {
     phraseSearch,
     fuzzy,
     loose,
+    regex: regexMode,
     showContext: tab.showContext,
     contextLines: configContextLines,
     tabId: tab.id,
@@ -755,18 +992,31 @@ function getCurrentWordPrefix(): string {
 }
 
 function requestAutocomplete(): void {
+  if (regexMode) {
+    hideAutocomplete();
+    return;
+  }
   const prefix = getCurrentWordPrefix();
   if (prefix.length < 2) {
     hideAutocomplete();
     return;
   }
   clearTimeout(acTimer);
-  acTimer = setTimeout(() => vscode.postMessage({ type: 'autocomplete', prefix }), 150);
+  const requestId = ++autocompleteRequestSeq;
+  pendingAutocompleteRequestId = requestId;
+  acTimer = setTimeout(
+    () => vscode.postMessage({ type: 'autocomplete', prefix, requestId }),
+    150
+  );
+}
+
+function hasSearchableQuery(query: string): boolean {
+  return regexMode ? query.length > 0 : query.trim().length > 0;
 }
 
 function renderAutocomplete(): void {
   autocompleteEl.innerHTML = '';
-  if (suggestions.length === 0) {
+  if (regexMode || suggestions.length === 0) {
     hideAutocomplete();
     return;
   }
@@ -798,6 +1048,7 @@ function applySuggestion(s: Suggestion): void {
 }
 
 function hideAutocomplete(): void {
+  pendingAutocompleteRequestId = ++autocompleteRequestSeq;
   autocompleteEl.classList.remove('visible');
   autocompleteEl.innerHTML = '';
   acActiveIndex = -1;
@@ -810,38 +1061,9 @@ function updateQueryHighlight(): void {
 }
 
 function highlightQueryHtml(raw: string): string {
-  if (!raw) {
-    return '';
-  }
-  const regex =
-    /loose\d*:|(-?)(ext|dir|file|age):(\S+)|\+(?:"(?:[^"\\]|\\.)*"|[^\s]+)|-(?:"(?:[^"\\]|\\.)*"|[^\s]+)|"(?:[^"\\]|\\.)*"|[^\s]+/gi;
-  let html = '';
-  let lastEnd = 0;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(raw)) !== null) {
-    if (match.index > lastEnd) {
-      html += escapeHtml(raw.slice(lastEnd, match.index));
-    }
-    const full = match[0];
-    let cls = 'term';
-    if (/^loose\d*:$/i.test(full)) {
-      cls = 'loose';
-    } else if (match[2]) {
-      cls = match[1] === '-' ? 'filter-exclude' : 'filter-include';
-    } else if (full.startsWith('+')) {
-      cls = 'filter-include';
-    } else if (full.startsWith('-') && !match[2]) {
-      cls = 'filter-exclude';
-    } else if (full.startsWith('"')) {
-      cls = 'quoted';
-    }
-    html += `<span class="${cls}">${escapeHtml(full)}</span>`;
-    lastEnd = match.index + full.length;
-  }
-  if (lastEnd < raw.length) {
-    html += escapeHtml(raw.slice(lastEnd));
-  }
-  return html;
+  return highlightQuery(raw, regexMode)
+    .map((segment) => `<span class="${segment.kind}">${escapeHtml(segment.text)}</span>`)
+    .join('');
 }
 
 function escapeHtml(s: string): string {
@@ -1323,6 +1545,9 @@ window.addEventListener('message', (event) => {
       }
       break;
     case 'results': {
+      if (suppressSearchMessages) {
+        break;
+      }
       const tab = tabs.find((t) => t.id === msg.tabId) ?? getActiveTab();
       if (tab) {
         tab.results = msg.result;
@@ -1336,6 +1561,9 @@ window.addEventListener('message', (event) => {
       break;
     }
     case 'searchStarted': {
+      if (suppressSearchMessages || ignoredSearchIds.has(msg.searchId)) {
+        break;
+      }
       if (!isMessageId(msg.searchId) || msg.searchId < latestSearchId) {
         break;
       }
@@ -1383,6 +1611,10 @@ window.addEventListener('message', (event) => {
         break;
       }
       const identity: PartialAckIdentity = { searchId: msg.searchId, chunkId: msg.chunkId };
+      if (suppressSearchMessages || ignoredSearchIds.has(msg.searchId)) {
+        sendResultsPartialAck(identity);
+        break;
+      }
       const tab = resolveMessageTab(msg.tabId);
       if (!tab) {
         sendResultsPartialAck(identity);
@@ -1491,6 +1723,9 @@ window.addEventListener('message', (event) => {
       break;
     }
     case 'resultsHighlightPatch': {
+      if (suppressSearchMessages || ignoredSearchIds.has(msg.searchId)) {
+        break;
+      }
       if (!isMessageId(msg.searchId) || !Array.isArray(msg.highlighted)) {
         break;
       }
@@ -1518,6 +1753,9 @@ window.addEventListener('message', (event) => {
       break;
     }
     case 'searchFailed': {
+      if (suppressSearchMessages || ignoredSearchIds.has(msg.searchId)) {
+        break;
+      }
       if (!isMessageId(msg.searchId)) {
         break;
       }
@@ -1531,11 +1769,12 @@ window.addEventListener('message', (event) => {
       tab.searching = false;
       tab.completedSearchId = msg.searchId;
       if (tab.id === activeTabId) {
-        statusHits.textContent = `Search failed: ${String(msg.message ?? 'Unknown error')}`;
+        const message = String(msg.message ?? 'Unknown error');
+        statusHits.textContent = `Search failed: ${message}`;
         if (!tab.results?.hits.length) {
           const error = document.createElement('div');
           error.className = 'empty';
-          error.textContent = 'Search failed';
+          error.textContent = `Search failed: ${message}`;
           resultsEl.innerHTML = '';
           resultsEl.appendChild(error);
         }
@@ -1556,7 +1795,12 @@ window.addEventListener('message', (event) => {
     }
     case 'autocomplete': {
       const prefix = typeof msg.prefix === 'string' ? msg.prefix : '';
-      if (!prefix || prefix !== getCurrentWordPrefix()) {
+      if (
+        regexMode ||
+        !prefix ||
+        prefix !== getCurrentWordPrefix() ||
+        msg.requestId !== pendingAutocompleteRequestId
+      ) {
         break;
       }
       suggestions = msg.suggestions ?? [];
@@ -1574,6 +1818,7 @@ window.addEventListener('message', (event) => {
       break;
     case 'setQuery':
       searchInput.value = msg.query;
+      saveSearchInputSelection();
       updateQueryHighlight();
       doSearch(false);
       break;
@@ -1591,8 +1836,16 @@ function postPanelFocus(focused: boolean): void {
 }
 
 window.addEventListener('focus', () => postPanelFocus(true));
-window.addEventListener('blur', () => postPanelFocus(false));
-document.addEventListener('pointerdown', () => postPanelFocus(true));
+window.addEventListener('blur', () => {
+  closeRegexSnippetMenu();
+  postPanelFocus(false);
+});
+document.addEventListener('pointerdown', (event) => {
+  if (!regexSplit.contains(event.target as Node)) {
+    closeRegexSnippetMenu();
+  }
+  postPanelFocus(true);
+});
 
 resultsEl.addEventListener('contextmenu', (e) => {
   const row = (e.target as HTMLElement).closest('.hit-row');
@@ -1633,6 +1886,7 @@ resultContextMenu.addEventListener('click', (e) => {
 document.addEventListener('click', () => hideResultContextMenu());
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    closeRegexSnippetMenu();
     hideResultContextMenu();
   }
 });
@@ -1658,6 +1912,9 @@ document.addEventListener('visibilitychange', () => {
 });
 
 ensureDefaultTab();
+renderRegexSnippetMenu();
 renderTabs();
 syncContextButton();
+syncModeButtons();
+saveSearchInputSelection();
 vscode.postMessage({ type: 'ready' });

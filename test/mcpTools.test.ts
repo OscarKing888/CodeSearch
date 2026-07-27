@@ -57,10 +57,16 @@ function testParseCliArgs(): void {
 }
 
 function testDefaultOptionsAndPathCase(): void {
-  const defaults = mergeSearchOptions({ phraseSearch: undefined, fuzzy: undefined });
+  const defaults = mergeSearchOptions({
+    phraseSearch: undefined,
+    fuzzy: undefined,
+    regex: undefined,
+  });
   assert.strictEqual(defaults.phraseSearch, true);
   assert.strictEqual(defaults.fuzzy, false);
+  assert.strictEqual(defaults.regex, false);
   assert.strictEqual(mergeSearchOptions({ phraseSearch: false }).phraseSearch, false);
+  assert.strictEqual(mergeSearchOptions({ regex: true }).regex, true);
   assert.strictEqual(
     pathComparisonKey('C:\\Project\\File.ts', 'win32'),
     pathComparisonKey('c:/project/file.ts', 'win32')
@@ -228,6 +234,49 @@ async function testHandlersAndBuildState(): Promise<void> {
     assert.ok(searchPayload.hitCount >= 1);
     assert.strictEqual(searchPayload.hits[0].localPath, sampleTs);
     assert.strictEqual(handlers.searchCode({ query: '   ' }).isError, true);
+
+    const regexSearch = handlers.searchCode({
+      query: String.raw`^const\s+mcpUniqueSymbol\s*=\s*\d+;$ ext:ts`,
+      regex: true,
+      maxResults: 10,
+    });
+    assert.strictEqual(regexSearch.isError, undefined);
+    const regexPayload = JSON.parse(regexSearch.content[0].text) as {
+      hitCount: number;
+      hits: Array<{ localPath: string; line: number; lineText: string }>;
+    };
+    assert.strictEqual(regexPayload.hitCount, 1);
+    assert.strictEqual(regexPayload.hits[0].localPath, sampleTs);
+    assert.strictEqual(regexPayload.hits[0].line, 1);
+    assert.ok(regexPayload.hits[0].lineText.includes('mcpUniqueSymbol'));
+
+    const invalidRegex = handlers.searchCode({ query: '[', regex: true });
+    assert.strictEqual(invalidRegex.isError, true);
+    assert.match(invalidRegex.content[0].text, /regular expression|regex|unterminated|invalid/i);
+
+    const csvExtSearch = handlers.searchCode({
+      query: 'foo ext:h,cpp,inc -ext:inc',
+      maxResults: 10,
+    });
+    assert.strictEqual(csvExtSearch.isError, undefined);
+    const csvExtPayload = JSON.parse(csvExtSearch.content[0].text) as {
+      hits: Array<{ path: string }>;
+    };
+    assert.deepStrictEqual(
+      new Set(csvExtPayload.hits.map((hit) => hit.path)),
+      new Set([fooCpp, fooH])
+    );
+
+    const csvExtExclude = handlers.searchCode({
+      query: 'foo ext:h,cpp,inc -ext:h,inc',
+      maxResults: 10,
+    });
+    assert.strictEqual(csvExtExclude.isError, undefined);
+    const csvExtExcludePayload = JSON.parse(csvExtExclude.content[0].text) as {
+      hits: Array<{ path: string }>;
+    };
+    assert.ok(csvExtExcludePayload.hits.length > 0);
+    assert.ok(csvExtExcludePayload.hits.every((hit) => hit.path === fooCpp));
 
     const read = handlers.readIndexedFile({ path: sampleTs, startLine: 1, endLine: 1 });
     assert.strictEqual(read.isError, undefined);
@@ -503,6 +552,36 @@ async function testPathMappingOnSearchAndRead(): Promise<void> {
     assert.ok(payload.hits.length >= 1);
     assert.strictEqual(payload.hits[0].path, sample);
     assert.ok(payload.hits[0].localPath.includes(`${path.sep}virtual${path.sep}`));
+
+    const mappedDirFilter = handlers.searchCode({
+      query: 'mappedTokenXYZ dir:**/virtual',
+    });
+    assert.strictEqual(mappedDirFilter.isError, undefined);
+    const mappedDirPayload = JSON.parse(mappedDirFilter.content[0].text) as {
+      hits: Array<{ path: string; localPath: string }>;
+    };
+    assert.ok(
+      mappedDirPayload.hits.some(
+        (hit) =>
+          hit.path === sample &&
+          hit.localPath.includes(`${path.sep}virtual${path.sep}`)
+      ),
+      'dir: glob should match the mapped local directory'
+    );
+
+    const mappedFileFilter = handlers.searchCode({
+      query: 'mappedTokenXYZ file:**/virtual/mapped.ts',
+    });
+    assert.strictEqual(mappedFileFilter.isError, undefined);
+    const mappedFilePayload = JSON.parse(mappedFileFilter.content[0].text) as {
+      hits: Array<{ path: string; localPath: string }>;
+    };
+    assert.ok(
+      mappedFilePayload.hits.some(
+        (hit) => hit.path === sample && hit.localPath === payload.hits[0].localPath
+      ),
+      'file: glob should match the mapped local path'
+    );
 
     const read = handlers.readIndexedFile({ path: payload.hits[0].localPath });
     assert.strictEqual(read.isError, undefined);

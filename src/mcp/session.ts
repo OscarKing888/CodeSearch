@@ -15,6 +15,7 @@ import {
 export const DEFAULT_MCP_SEARCH_OPTIONS: SearchOptions = {
   caseSensitive: false,
   phraseSearch: true,
+  regex: false,
   contextLines: 1,
   maxResults: 50,
   fuzzy: false,
@@ -146,7 +147,13 @@ export class McpIndexSession {
       return {
         meta: { ...meta, dbPath, readOnly: true },
         service,
-        searcher: new SearchService(service),
+        searcher: new SearchService(service, (indexedPath) =>
+          applyDirectoryMapping(
+            indexedPath,
+            meta.directoryMappings ?? [],
+            false
+          )
+        ),
       };
     } catch (error) {
       service.dispose();

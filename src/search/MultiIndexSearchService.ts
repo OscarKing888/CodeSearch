@@ -33,8 +33,17 @@ export class MultiIndexSearchService {
   rebuildSearchers(): void {
     this.searchers.clear();
     for (const service of this.indexManager.getAllServices()) {
-      this.searchers.set(service.id, new SearchService(service));
+      this.searchers.set(service.id, this.createSearcher(service));
     }
+  }
+
+  private createSearcher(
+    service: ReturnType<IndexManager['getAllServices']>[number]
+  ): SearchService {
+    return new SearchService(
+      service,
+      (indexedPath) => this.indexManager.mapHitPath(service.id, indexedPath)
+    );
   }
 
   search(queryText: string, options: SearchOptions): MultiSearchResult {
@@ -59,7 +68,7 @@ export class MultiIndexSearchService {
     const perIndexLimit = Math.ceil(options.maxResults / services.length);
 
     for (const indexService of services) {
-      const searcher = this.searchers.get(indexService.id) ?? new SearchService(indexService);
+      const searcher = this.searchers.get(indexService.id) ?? this.createSearcher(indexService);
       const result = searcher.search(queryText, { ...options, maxResults: perIndexLimit });
       partial = partial || result.partialIndex;
 
@@ -105,7 +114,8 @@ export class MultiIndexSearchService {
 
   async *searchStreaming(
     queryText: string,
-    options: SearchOptions
+    options: SearchOptions,
+    signal?: AbortSignal
   ): AsyncGenerator<MultiSearchStreamBatch> {
     const start = Date.now();
     const services = this.indexManager.getAllServices();
@@ -127,7 +137,7 @@ export class MultiIndexSearchService {
 
     if (services.length === 1) {
       const indexService = services[0];
-      const searcher = this.searchers.get(indexService.id) ?? new SearchService(indexService);
+      const searcher = this.searchers.get(indexService.id) ?? this.createSearcher(indexService);
       const yieldThrottle = new StreamYieldThrottle();
       const fileSet = new Set<string>();
       let hitCount = 0;
@@ -135,7 +145,10 @@ export class MultiIndexSearchService {
       for await (const batch of searcher.searchStreaming(queryText, {
         ...options,
         maxResults: perIndexLimit,
-      })) {
+      }, signal)) {
+        if (signal?.aborted) {
+          return;
+        }
         const hits: ExtendedSearchHit[] = [];
         for (const hit of batch.hits) {
           const localPath = this.indexManager.mapHitPath(indexService.id, hit.path);
@@ -196,11 +209,17 @@ export class MultiIndexSearchService {
     };
 
     for (const indexService of services) {
-      const searcher = this.searchers.get(indexService.id) ?? new SearchService(indexService);
+      if (signal?.aborted) {
+        return;
+      }
+      const searcher = this.searchers.get(indexService.id) ?? this.createSearcher(indexService);
       for await (const batch of searcher.searchStreaming(queryText, {
         ...options,
         maxResults: perIndexLimit,
-      })) {
+      }, signal)) {
+        if (signal?.aborted) {
+          return;
+        }
         partial = partial || batch.partialIndex;
 
         for (const hit of batch.hits) {

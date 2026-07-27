@@ -24,6 +24,20 @@ VS Code / Cursor 扩展，为工作区提供全文代码索引与即时搜索。
 - **索引管理**：工具栏 ⚙ 打开管理页，配置 Primary / Secondary、共享索引与搜索范围
 - **AI Agent 集成**：只读 MCP 供 Cursor、Copilot 等 Agent 查询已有索引；工具栏文档图标或命令面板安装 Agent 集成
 
+## 搜索语法
+
+过滤器必须是由空白分隔的独立项；同类正向过滤器按 **OR** 组合，不同类别按 **AND** 组合，任一负向过滤器优先排除。
+
+```text
+普通：needle ext:h,cpp,inc file:*Parser* dir:src/** -file:*.test.* -dir:*generated* -ext:bak
+正则：开启工具栏的 .* 后输入 ^class\s+\w+\b ext:h,cpp -dir:*ThirdParty*
+```
+
+- `ext:` 支持逗号分隔的扩展名；`file:` / `dir:` 支持标准 Glob：`*` 不跨目录、`**` 可跨目录、`?` 匹配单个字符，路径分隔符统一处理且不区分大小写。
+- `file:"My File*.cpp"` 可用双引号包含空格。正则模式使用逐行 ECMAScript pattern，不要写 `/.../flags`，大小写由 `Aa` 控制。
+- 正则模式只解析表达式末尾连续的 `ext:` / `file:` / `dir:` / `age:` 过滤器，不支持跨行，扫描大型索引时可能比普通全文搜索慢。
+- `.*` 旁的下拉菜单可把常用正则字符插入当前光标或选区；菜单仅用于面板输入，MCP 调用使用 `regex: true`。
+
 ## 快捷命令
 
 | 命令 | 快捷键 |
