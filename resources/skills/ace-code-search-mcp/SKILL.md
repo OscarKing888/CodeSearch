@@ -46,7 +46,7 @@ By default the server exposes only indexes whose mapped output roots are fully c
 - `query` (required): Ace Code Search query text.
 - `indexId`: index ID or a unique index name. Prefer the ID.
 - `caseSensitive` (default `false`): set `true` for exact case.
-- `phraseSearch` (default `true`): adjacent multi-word phrase matching. Set `false` to search separate terms. A leading quoted query such as `"request animation frame"` forces phrase mode.
+- `phraseSearch` (default `true`): adjacent multi-word phrase matching via FTS tokens. Set `false` so each term matches as a content **substring** (AND across space-separated terms); this finds CJK fragments such as `灯光` inside `发送区域灯光控制事件` and ASCII fragments such as `Animation` inside `requestAnimationFrame`. A leading quoted query such as `"request animation frame"` forces phrase mode. Substring mode does not use the FTS inverted index and can be slower on large indexes—prefer `ext:` / `dir:` filters when possible. Terms that contain `*` still use identifier-wildcard FTS.
 - `regex` (default `false`): treat the raw query pattern as a per-line ECMAScript regular expression. Do not add `/.../flags`; `caseSensitive` controls case. Phrase/fuzzy/loose settings are ignored in this mode.
 - `fuzzy` (default `false`): typo-tolerant identifier-word matching using Levenshtein distance. Maximum edit distance is 0 for length 1–3, 1 for length 4–6, and 2 for length 7+.
 - `loose` (default `false`): match all query terms as identifier tokens in any order within `looseGap`.
@@ -58,10 +58,10 @@ By default the server exposes only indexes whose mapped output roots are fully c
 
 There is no dedicated `wholeWord` MCP parameter.
 
-- A bare identifier, such as `requestAnimationFrame`, is the best whole-token search because SQLite FTS first selects matching tokens.
+- A bare identifier, such as `requestAnimationFrame`, is the best whole-token search because SQLite FTS first selects matching tokens (Phrase ON).
 - Do not claim strict whole-word guarantees: post-filter highlighting may also find the same text inside a longer token in an already selected file.
-- For an exact case-sensitive identifier, use the bare identifier with `caseSensitive: true`.
-- For an exact contiguous text substring, add a required content filter: `+"literal text"`. This is substring matching, not whole-word matching.
+- For an exact case-sensitive identifier, use the bare identifier with `caseSensitive: true` and Phrase ON.
+- Exact contiguous substring without `+""`: set `phraseSearch: false` (each term is a substring). Alternatively, add a required content filter: `+"literal text"`.
 - For punctuation-separated names, split on punctuation when the literal form returns no result. Example: search `better sqlite3` for `better-sqlite3`.
 
 ## Query syntax
@@ -83,9 +83,10 @@ There is no dedicated `wholeWord` MCP parameter.
 
 - Known symbol: bare identifier; enable `caseSensitive` only when case distinguishes symbols.
 - Exact phrase: quoted text or `phraseSearch: true`.
+- Contiguous substring / CJK fragment / partial identifier without wildcards: `phraseSearch: false`.
 - Misspelling or uncertain symbol spelling: `fuzzy: true`.
 - Terms near each other but not adjacent or not ordered: `loose: true`, then increase `looseGap` only if needed.
-- Partial identifier: use `*`; do not enable fuzzy unless typo tolerance is also required.
+- Partial identifier with wildcards: use `*`; do not enable fuzzy unless typo tolerance is also required.
 - Structural line pattern: set `regex: true`; keep filters at the end of the query and prefer `ext:` / `dir:` constraints on large indexes.
 - Too many results: add `indexId`, `ext:`, `dir:`, or `file:` before increasing `maxResults`.
 - No results for punctuation: split punctuation into spaces before concluding the code is absent.

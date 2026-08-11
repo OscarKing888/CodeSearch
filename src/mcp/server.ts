@@ -245,7 +245,12 @@ async function main(): Promise<void> {
         query: z.string().describe('Search query (Ace Code Search syntax)'),
         indexId: z.string().optional().describe('Limit to one index id or unique name'),
         caseSensitive: z.boolean().optional().describe('Case-sensitive match (default false)'),
-        phraseSearch: z.boolean().optional().describe('Treat multi-word as phrase (default true)'),
+        phraseSearch: z
+          .boolean()
+          .optional()
+          .describe(
+            'Phrase/token match when true (default); when false each term is a content substring (CJK/partial identifier), slower without FTS'
+          ),
         regex: z
           .boolean()
           .optional()

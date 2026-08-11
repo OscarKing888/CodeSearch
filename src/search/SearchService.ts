@@ -211,8 +211,13 @@ export class SearchService {
     partialIndex: boolean,
     signal?: AbortSignal
   ): AsyncGenerator<SearchStreamBatch> {
-    const ftsQuery = buildFtsMatch(parsed.terms, parsed.phrase);
-    if (!ftsQuery) {
+    const useSubstring = shouldUseSubstringCandidates(parsed);
+    const ftsQuery = useSubstring ? '' : buildFtsMatch(parsed.terms, parsed.phrase);
+    if (!useSubstring && !ftsQuery) {
+      yield emptyStreamBatch(parsed.raw, start, partialIndex);
+      return;
+    }
+    if (useSubstring && parsed.terms.length === 0) {
       yield emptyStreamBatch(parsed.raw, start, partialIndex);
       return;
     }
@@ -467,8 +472,17 @@ export class SearchService {
     const searchTerms = parsed.terms.flatMap((t) =>
       parsed.phrase && !parsed.multiWildcard ? [t] : t.split(/\s+/).filter(Boolean)
     );
+    const candidateQuery = shouldUseSubstringCandidates(parsed)
+      ? this.buildSubstringCandidateQuery(searchTerms, options.caseSensitive, parsed)
+      : null;
 
-    for await (const row of this.iterateCandidateRows(db, ftsQuery, parsed, signal)) {
+    for await (const row of this.iterateCandidateRows(
+      db,
+      ftsQuery,
+      parsed,
+      signal,
+      candidateQuery
+    )) {
       if (signal?.aborted) {
         return;
       }
@@ -550,8 +564,12 @@ export class SearchService {
     parsed: ParsedQuery,
     options: SearchOptions
   ): SearchHit[] {
-    const ftsQuery = buildFtsMatch(parsed.terms, parsed.phrase);
-    if (!ftsQuery) {
+    const useSubstring = shouldUseSubstringCandidates(parsed);
+    const ftsQuery = useSubstring ? '' : buildFtsMatch(parsed.terms, parsed.phrase);
+    if (!useSubstring && !ftsQuery) {
+      return [];
+    }
+    if (useSubstring && parsed.terms.length === 0) {
       return [];
     }
 
@@ -750,6 +768,34 @@ export class SearchService {
     return { kind: 'stmt', sql, params };
   }
 
+  /**
+   * Coarse filter for Phrase Search OFF: each term must appear as a content
+   * substring (AND). Avoids FTS unicode61 token boundaries so CJK/partial
+   * identifier substrings can reach findHitsInContent.
+   */
+  private buildSubstringCandidateQuery(
+    terms: string[],
+    caseSensitive: boolean,
+    parsed: ParsedQuery
+  ): CandidateQuery {
+    const params: (string | number)[] = [];
+    let sql = 'SELECT path, content, ext, dir, mtime FROM files WHERE 1=1';
+    for (const term of terms) {
+      if (!term) {
+        continue;
+      }
+      if (caseSensitive) {
+        sql += ' AND INSTR(content, ?) > 0';
+        params.push(term);
+      } else {
+        sql += ` AND content LIKE '%' || ? || '%' ESCAPE '\\'`;
+        params.push(escapeLikePattern(term));
+      }
+    }
+    sql += this.buildMtimeFilter(parsed, Date.now(), params);
+    return { kind: 'stmt', sql, params };
+  }
+
   private buildFallbackCandidateQuery(parsed: ParsedQuery): CandidateQuery {
     const params: (string | number)[] = [];
     let sql = 'SELECT path, content, ext, dir, mtime FROM files WHERE 1=1';
@@ -760,9 +806,10 @@ export class SearchService {
   private *iterateCandidateRowsSync(
     db: SqliteDatabase,
     ftsQuery: string,
-    parsed: ParsedQuery
+    parsed: ParsedQuery,
+    overrideQuery?: CandidateQuery | null
   ): Generator<CandidateRow> {
-    const query = this.buildCandidateQuery(ftsQuery, parsed);
+    const query = overrideQuery ?? this.buildCandidateQuery(ftsQuery, parsed);
     const iterateRows = function* (
       sql: string,
       params: (string | number)[]
@@ -785,10 +832,11 @@ export class SearchService {
     db: SqliteDatabase,
     ftsQuery: string,
     parsed: ParsedQuery,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    overrideQuery?: CandidateQuery | null
   ): AsyncGenerator<CandidateRow> {
     const yieldThrottle = new StreamYieldThrottle();
-    const query = this.buildCandidateQuery(ftsQuery, parsed);
+    const query = overrideQuery ?? this.buildCandidateQuery(ftsQuery, parsed);
 
     const iterateRows = async function* (
       sql: string,
@@ -900,8 +948,11 @@ export class SearchService {
     const searchTerms = parsed.terms.flatMap((t) =>
       parsed.phrase && !parsed.multiWildcard ? [t] : t.split(/\s+/).filter(Boolean)
     );
+    const candidateQuery = shouldUseSubstringCandidates(parsed)
+      ? this.buildSubstringCandidateQuery(searchTerms, options.caseSensitive, parsed)
+      : null;
 
-    for (const row of this.iterateCandidateRowsSync(db, ftsQuery, parsed)) {
+    for (const row of this.iterateCandidateRowsSync(db, ftsQuery, parsed, candidateQuery)) {
       if (!this.rowPassesFilters(row, parsed, options.caseSensitive)) {
         continue;
       }
@@ -1153,6 +1204,18 @@ export class SearchService {
     }
     return sql;
   }
+}
+
+function shouldUseSubstringCandidates(parsed: ParsedQuery): boolean {
+  return (
+    !parsed.phrase &&
+    parsed.terms.length > 0 &&
+    !parsed.terms.some((term) => term.includes('*'))
+  );
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
 function emptyStreamBatch(query: string, start: number, partialIndex: boolean): SearchStreamBatch {

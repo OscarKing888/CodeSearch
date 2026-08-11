@@ -30,6 +30,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Streaming search shows loaded vs. discovered hit counts; `codeSearch.profileSearch` off by default
 - Fail-closed migration for managed legacy Skill/rule/config; MCP feature-parity maintenance rule
 
+## [0.8.12] - 2026-08-11
+
+### Changed
+- Fix phase match search
+
 ## [0.8.11] - 2026-07-27
 
 ### Changed
