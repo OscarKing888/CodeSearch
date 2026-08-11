@@ -37,6 +37,20 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_500): Promise<voi
   }
 }
 
+function waitForLine(
+  filePath: string,
+  predicate: (line: Record<string, unknown>) => boolean,
+  timeoutMs = 1_500
+): Promise<void> {
+  return waitFor(() => {
+    try {
+      return readLines(filePath).some(predicate);
+    } catch {
+      return false;
+    }
+  }, timeoutMs);
+}
+
 async function testImmediateMetaCheckpointAndSuccess(root: string): Promise<void> {
   const globalStoragePath = path.join(root, 'global-success');
   const workspaceRoot = path.join(root, 'workspace-success');
@@ -48,7 +62,7 @@ async function testImmediateMetaCheckpointAndSuccess(root: string): Promise<void
   const logPath = session.getLogPath();
   assert.ok(logPath);
 
-  await waitFor(() => fs.existsSync(logPath!));
+  await waitForLine(logPath!, (line) => line.type === 'meta');
   assert.ok(Date.now() - started < 500, 'meta should be visible without waiting for search completion');
   let lines = readLines(logPath!);
   assert.strictEqual(lines.length, 1);
@@ -56,16 +70,14 @@ async function testImmediateMetaCheckpointAndSuccess(root: string): Promise<void
   assert.strictEqual(lines[0].query, 'AActor');
 
   session.mark('running_checkpoint', { value: 1 });
-  await waitFor(() => readLines(logPath!).some((line) => line.phase === 'running_checkpoint'));
+  await waitForLine(logPath!, (line) => line.phase === 'running_checkpoint');
 
   session.mark('provider_resultsPartial_ack_timeout', {
     searchId: 1,
     chunkId: 99,
     waitMs: 2_001,
   });
-  await waitFor(() =>
-    readLines(logPath!).some((line) => line.phase === 'provider_resultsPartial_ack_timeout')
-  );
+  await waitForLine(logPath!, (line) => line.phase === 'provider_resultsPartial_ack_timeout');
 
   session.mark('provider_resultsPartial_ack', {
     searchId: 1,
