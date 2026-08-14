@@ -1,3 +1,5 @@
+[VS Code](https://marketplace.visualstudio.com/items?itemName=OscarKing888.ace-code-search) | [Cursor](https://open-vsx.org/extension/OscarKing888/ace-code-search)
+
 [中文](https://github.com/OscarKing888/CodeSearch/blob/main/README.md) | [English](https://github.com/OscarKing888/CodeSearch/blob/main/README_en.md)
 
 # Ace Code Search
