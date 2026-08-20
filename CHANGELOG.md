@@ -30,6 +30,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Streaming search shows loaded vs. discovered hit counts; `codeSearch.profileSearch` off by default
 - Fail-closed migration for managed legacy Skill/rule/config; MCP feature-parity maintenance rule
 
+## [0.8.13] - 2026-08-20
+
+### Changed
+- Fix Detail: Documents above the size limit cannot be synchronized with extensions.
+
 ## [0.8.12] - 2026-08-11
 
 ### Changed

@@ -44,6 +44,7 @@
 - Editor watching: `workspace.createFileSystemWatcher(RelativePattern)` — never reintroduce extension-host chokidar crawls; CLI keeps chokidar. Shared `IndexingMatcher`; register watcher before reporting `Up to date`.
 - Streaming: `searchStreaming()` + ack protocol (`searchId`/`chunkId`); sync `search()` for CLI/tests. See `src/search/searchStreamBuffer.ts`, `test/resultsPartialAckController.test.ts`. Profile logs (`codeSearch.profileSearch`): `src/utils/searchProfile.ts`; ownership so late finalize cannot overwrite a newer session. Persistence polling tests wait for a readable JSONL record, not only file existence, because initial and append writes are asynchronous.
 - Browser-only webview entry points stay out of the Node `tsconfig.json` (esbuild). Read `webviewView.visible` (no boolean event payload).
+- Opening hit locations (search panel + class hierarchy) uses `openWithFallback` in `src/ui/openCodeLocation.ts`: try `openTextDocument`/`showTextDocument`, then `vscode.open` if the editor refuses to sync the document to the extension host. Do not rely on extension-host document sync alone. This is UI-only — MCP `search_code` returns paths and does not open editors. Coverage: `test/openEditorFallback.test.ts`.
 
 ## Manage Indexes webview UI
 
@@ -65,6 +66,7 @@
 
 - Index-only pairing (`src/pairing/headerSourcePairing.ts`); no filesystem fallback. Priority: same dir+stem, then Public↔Private, then path distance.
 - `codeSearch.switchHeaderSource` on Alt+O; package.json unbinds `C_Cpp.SwitchHeaderSource` / `clangd.switchheadersource`. Do **not** register those third-party command IDs (duplicate IDs can wedge the extension host). `registerHeaderSourceCommandOverrides()` is a compatibility no-op. `migrateUserHeaderSourceKeybindings()` rewrites legacy Alt+O user bindings on activate.
+- Opening a counterpart uses `openWithFallback` in `src/pairing/openCounterpartFile.ts` (same `openTextDocument` → `vscode.open` fallback as search/hierarchy). VS Code/Cursor may reject `openTextDocument` with a misleading "size limit / cannot be synchronized with extensions" error even for small files when the model is a simple-widget or otherwise unsynced; `vscode.open` runs in the main process and still opens the file. This is UI-only — MCP `find_header_source` returns counterpart paths and does not open editors. Coverage: `test/openEditorFallback.test.ts`.
 
 ## Release documentation
 
