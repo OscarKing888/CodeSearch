@@ -11,6 +11,7 @@ import {
 } from '../indexingSettings';
 import {
   discoverWorkspaceIndexCandidates,
+  PeerIndexEntry,
   WorkspaceIndexCandidate,
 } from '../index/indexDiscovery';
 import { canonicalPathKey, samePath } from '../index/sharedIndexStorage';
@@ -41,6 +42,10 @@ export interface IndexListItem {
   isAttached: boolean;
   exists: boolean;
   isShared: boolean;
+  /** True when the entry comes only from a peer IDE registry (not local). */
+  external: boolean;
+  /** Human-readable peer source(s), e.g. "VS Code" or "VS Code, Cursor". */
+  sourceLabel?: string;
   writerLabel?: string;
   directoryMappings: DirectoryMapping[];
   mappingsText: string;
@@ -142,7 +147,8 @@ export function parseExcludeRulesInput(
 
 export function getIndexListPayload(
   manager: IndexManager,
-  workspaceContext?: IndexManagementWorkspaceContext
+  workspaceContext?: IndexManagementWorkspaceContext,
+  externalIndexes: readonly PeerIndexEntry[] = []
 ): IndexListPayload {
   const indexingSettings = getIndexingSettings();
   const primary = manager.getPrimary();
@@ -178,7 +184,12 @@ export function getIndexListPayload(
       readOnly: runtime?.requestedReadOnly ?? service.isReadOnly(),
     });
   }
-  const catalogIndexes = mergeIndexCatalog(registryIndexes, activeIndexes);
+  const externalById = new Map(externalIndexes.map((entry) => [entry.meta.id, entry]));
+  const catalogIndexes = mergeIndexCatalog(
+    registryIndexes,
+    activeIndexes,
+    externalIndexes.map((entry) => entry.meta)
+  );
   const items: IndexListItem[] = [];
 
   for (const meta of catalogIndexes) {
@@ -188,6 +199,11 @@ export function getIndexListPayload(
     const excludeText = formatExcludeRules(meta);
     const isPrimary = meta.id === primaryId;
     const isAttachedSecondary = attachedIds.has(meta.id);
+    const peerEntry = externalById.get(meta.id);
+    const isExternal =
+      !!peerEntry &&
+      !service &&
+      !registryIndexes.some((item) => item.id === meta.id);
     const exists = fs.existsSync(meta.dbPath);
     const status = progress?.status ?? (exists ? 'available' : 'missing');
     const readOnly = service?.isReadOnly() ?? meta.readOnly;
@@ -204,6 +220,10 @@ export function getIndexListPayload(
       isAttached: isPrimary || isAttachedSecondary,
       exists,
       isShared: workspaceContext ? samePath(meta.dbPath, workspaceContext.sharedDbPath) : false,
+      external: isExternal,
+      sourceLabel: isExternal
+        ? peerEntry.sources.map(formatCandidateSource).join(', ')
+        : undefined,
       writerLabel:
         runtimeAccess && runtimeAccess.effectiveReadOnly && !runtimeAccess.requestedReadOnly
           ? runtimeAccess.writerOwner?.label
@@ -293,7 +313,7 @@ function candidateKey(dbPath: string): string {
   return canonicalPathKey(dbPath);
 }
 
-function formatCandidateSource(source: string): string {
+export function formatCandidateSource(source: string): string {
   if (source === 'current-ide') return 'This IDE';
   if (source.startsWith('vscode:')) return 'VS Code';
   if (source.startsWith('cursor:')) return 'Cursor';
@@ -529,6 +549,37 @@ export async function attachIndex(manager: IndexManager, id: string): Promise<st
   }
   if (manager.getPrimary()?.id === id) {
     return 'Primary index is always attached';
+  }
+  try {
+    const service = await manager.attachSecondary(meta.dbPath, {
+      name: meta.name,
+      readOnly: meta.readOnly || meta.rootDirs.length === 0,
+      directoryMappings: meta.directoryMappings,
+      rootDirs: meta.rootDirs,
+      waitForInitialIndex: false,
+    });
+    startSecondaryIndexingInBackground(service, meta.dbPath);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/**
+ * Opens a peer-IDE registry entry as a Secondary. attachSecondary upserts into
+ * the local registry only when the user explicitly attaches — discovery alone
+ * never writes peer catalog rows.
+ */
+export async function attachExternalIndex(
+  manager: IndexManager,
+  meta: IndexMeta
+): Promise<string | null> {
+  if (manager.getPrimary()?.id === meta.id) {
+    return 'Primary index is always attached';
+  }
+  const primaryPath = manager.getPrimary()?.getDbPath();
+  if (primaryPath && samePath(primaryPath, meta.dbPath)) {
+    return 'The active primary index cannot also be opened as a secondary index';
   }
   try {
     const service = await manager.attachSecondary(meta.dbPath, {

@@ -9,10 +9,14 @@ import { canonicalPathKey } from '../index/sharedIndexStorage';
  * union ensures the panel can still show and close those services. Deduplicate
  * by both registry id and physical database path so a stale/duplicate catalog
  * row cannot create a second card for an active database.
+ *
+ * `externalIndexes` (peer IDE registries) are appended last so a local or
+ * active entry for the same physical DB always wins the card.
  */
 export function mergeIndexCatalog(
   registryIndexes: readonly IndexMeta[],
-  activeIndexes: readonly IndexMeta[]
+  activeIndexes: readonly IndexMeta[],
+  externalIndexes: readonly IndexMeta[] = []
 ): IndexMeta[] {
   const merged: IndexMeta[] = [];
   const seenIds = new Set<string>();
@@ -32,6 +36,9 @@ export function mergeIndexCatalog(
     append(meta);
   }
   for (const meta of registryIndexes) {
+    append(meta);
+  }
+  for (const meta of externalIndexes) {
     append(meta);
   }
   return merged;

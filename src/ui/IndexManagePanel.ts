@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { IndexManager } from '../index/IndexManager';
+import { loadPeerRegistryIndexes, PeerIndexEntry } from '../index/indexDiscovery';
 import {
+  attachExternalIndex,
   attachIndex,
   browseAndAttachIndex,
   createStandaloneIndex,
@@ -19,6 +21,8 @@ import {
   useSharedPrimaryIndex,
 } from './IndexManagementService';
 
+const PEER_INDEX_CACHE_TTL_MS = 3_000;
+
 interface IndexManageBinding {
   generation: number;
   manager: IndexManager;
@@ -34,6 +38,9 @@ export class IndexManagePanel {
   private workspaceContext!: IndexManagementWorkspaceContext;
   private bindingGeneration = 0;
   private activeOperationGeneration: number | undefined;
+  private externalIndexes: PeerIndexEntry[] = [];
+  private externalIndexesLoadedAt = 0;
+  private externalIndexesLoad: Promise<PeerIndexEntry[]> | undefined;
   private readonly onProgress = () => this.scheduleProgressRefresh();
   private readonly onIndexesChanged = () => this.scheduleRefresh();
 
@@ -75,6 +82,9 @@ export class IndexManagePanel {
     this.activeOperationGeneration = undefined;
     clearTimeout(this.progressTimer);
     clearTimeout(this.stateTimer);
+    this.externalIndexes = [];
+    this.externalIndexesLoadedAt = 0;
+    this.externalIndexesLoad = undefined;
     if (this.manager) {
       this.manager.off('progress', this.onProgress);
       this.manager.off('indexesChanged', this.onIndexesChanged);
@@ -162,11 +172,56 @@ export class IndexManagePanel {
     );
   }
 
+  /** True when the id is known only from a peer registry (not local). */
+  private isExternalOnlyId(binding: IndexManageBinding, id: string): boolean {
+    if (binding.manager.getRegistry().getById(id)) {
+      return false;
+    }
+    return this.externalIndexes.some((entry) => entry.meta.id === id);
+  }
+
+  private async refreshExternalIndexes(binding: IndexManageBinding): Promise<PeerIndexEntry[]> {
+    const now = Date.now();
+    if (
+      this.externalIndexesLoad === undefined &&
+      now - this.externalIndexesLoadedAt < PEER_INDEX_CACHE_TTL_MS
+    ) {
+      return this.externalIndexes;
+    }
+    if (!this.externalIndexesLoad) {
+      const registryPath = binding.manager.getRegistry().getPath();
+      this.externalIndexesLoad = loadPeerRegistryIndexes(registryPath)
+        .then((entries) => {
+          if (this.isCurrentBinding(binding)) {
+            this.externalIndexes = entries;
+            this.externalIndexesLoadedAt = Date.now();
+          }
+          return entries;
+        })
+        .catch(() => {
+          // Peer discovery is best-effort; keep the last good cache.
+          return this.externalIndexes;
+        })
+        .finally(() => {
+          this.externalIndexesLoad = undefined;
+        });
+    }
+    return this.externalIndexesLoad;
+  }
+
   private async sendIndexes(binding: IndexManageBinding): Promise<void> {
     if (!this.panel || !this.isCurrentBinding(binding)) {
       return;
     }
-    const payload = getIndexListPayload(binding.manager, binding.workspaceContext);
+    const externalIndexes = await this.refreshExternalIndexes(binding);
+    if (!this.panel || !this.isCurrentBinding(binding)) {
+      return;
+    }
+    const payload = getIndexListPayload(
+      binding.manager,
+      binding.workspaceContext,
+      externalIndexes
+    );
     if (!this.panel || !this.isCurrentBinding(binding)) {
       return;
     }
@@ -177,7 +232,11 @@ export class IndexManagePanel {
     if (!this.panel || !this.isCurrentBinding(binding)) {
       return;
     }
-    const payload = getIndexListPayload(binding.manager, binding.workspaceContext);
+    const payload = getIndexListPayload(
+      binding.manager,
+      binding.workspaceContext,
+      this.externalIndexes
+    );
     if (!this.panel || !this.isCurrentBinding(binding)) {
       return;
     }
@@ -302,6 +361,16 @@ export class IndexManagePanel {
         break;
       case 'rename':
         if (msg.id && msg.name !== undefined) {
+          if (this.isExternalOnlyId(binding, msg.id)) {
+            await this.afterMutation(
+              binding,
+              'Open this index in search before renaming it in this IDE',
+              undefined,
+              undefined,
+              msg.requestId
+            );
+            break;
+          }
           await this.afterMutation(
             binding,
             await renameIndex(manager, msg.id, msg.name),
@@ -313,6 +382,16 @@ export class IndexManagePanel {
         break;
       case 'setMappings':
         if (msg.id && msg.text !== undefined) {
+          if (this.isExternalOnlyId(binding, msg.id)) {
+            await this.afterMutation(
+              binding,
+              'Open this index in search before editing mappings in this IDE',
+              undefined,
+              undefined,
+              msg.requestId
+            );
+            break;
+          }
           await this.afterMutation(
             binding,
             await setMappings(manager, msg.id, msg.text),
@@ -324,6 +403,16 @@ export class IndexManagePanel {
         break;
       case 'setExcludeRules':
         if (msg.id && msg.dirsText !== undefined && msg.filesText !== undefined && msg.globsText !== undefined) {
+          if (this.isExternalOnlyId(binding, msg.id)) {
+            await this.afterMutation(
+              binding,
+              'Open this index in search before editing exclude rules in this IDE',
+              undefined,
+              undefined,
+              msg.requestId
+            );
+            break;
+          }
           await this.afterMutation(
             binding,
             await setExcludeRules(manager, msg.id, msg.dirsText, msg.filesText, msg.globsText),
@@ -335,7 +424,20 @@ export class IndexManagePanel {
         break;
       case 'attach':
         if (msg.id) {
-          await this.afterMutation(binding, await attachIndex(manager, msg.id), 'Index attached');
+          if (manager.getRegistry().getById(msg.id)) {
+            await this.afterMutation(binding, await attachIndex(manager, msg.id), 'Index attached');
+          } else {
+            const peer = this.externalIndexes.find((entry) => entry.meta.id === msg.id);
+            if (!peer) {
+              await this.afterMutation(binding, 'Index not found');
+            } else {
+              await this.afterMutation(
+                binding,
+                await attachExternalIndex(manager, peer.meta),
+                'Index attached'
+              );
+            }
+          }
         }
         break;
       case 'detach':
@@ -353,6 +455,13 @@ export class IndexManagePanel {
         break;
       case 'delete':
         if (msg.id) {
+          if (this.isExternalOnlyId(binding, msg.id)) {
+            await this.afterMutation(
+              binding,
+              'Delete this index from the IDE that registered it, or open it here first'
+            );
+            break;
+          }
           const meta = manager.getRegistry().getById(msg.id);
           if (meta) {
             const confirm = await vscode.window.showWarningMessage(
@@ -615,7 +724,7 @@ export class IndexManagePanel {
     }
     .badge.primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
     .badge.secondary, .badge.shared { color: var(--vscode-foreground); background: var(--vscode-editor-inactiveSelectionBackground); }
-    .badge.muted { opacity: .72; }
+    .badge.muted, .badge.external { opacity: .72; }
     .status-dot {
       display: inline-block;
       flex: 0 0 auto;

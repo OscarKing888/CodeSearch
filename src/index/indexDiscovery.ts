@@ -5,6 +5,7 @@ import { sameWorkspaceRoots } from './workspaceRoots';
 import {
   findExistingRegistries,
   loadRegistryIndexes,
+  DiscoveredRegistry,
 } from '../mcp/discover';
 
 export interface IndexRegistrySnapshot {
@@ -20,6 +21,12 @@ export interface WorkspaceIndexCandidate {
   exactRoots: boolean;
   legacyHashMatch: boolean;
   exists: boolean;
+}
+
+/** An index known only from a peer IDE's registry (not written locally yet). */
+export interface PeerIndexEntry {
+  meta: IndexMeta;
+  sources: string[];
 }
 
 export function collectWorkspaceIndexCandidates(
@@ -99,4 +106,62 @@ export async function discoverWorkspaceIndexCandidates(
     }
   }
   return collectWorkspaceIndexCandidates(snapshots, workspaceRoots, workspaceHash);
+}
+
+/**
+ * Loads every index registered in peer IDE registries (VS Code / Cursor),
+ * excluding the caller's own registry. No workspace-root filter: the manage
+ * panel Available list shows the full peer catalog, matching local registry
+ * behavior. Deduplicates by physical dbPath and merges discovery sources.
+ *
+ * `registryCandidates` is for tests; production callers omit it so the default
+ * VS Code / Cursor globalStorage paths are scanned.
+ */
+export async function loadPeerRegistryIndexes(
+  localRegistryPath: string,
+  registryCandidates?: DiscoveredRegistry[]
+): Promise<PeerIndexEntry[]> {
+  const localKey = canonicalPathKey(localRegistryPath);
+  const found = await findExistingRegistries(registryCandidates);
+  const seenRegistryPaths = new Set<string>();
+  const byDbPath = new Map<string, PeerIndexEntry>();
+
+  for (const registry of found) {
+    const registryKey = canonicalPathKey(registry.path);
+    if (registryKey === localKey || seenRegistryPaths.has(registryKey)) {
+      continue;
+    }
+    seenRegistryPaths.add(registryKey);
+
+    let indexes: IndexMeta[];
+    try {
+      indexes = await loadRegistryIndexes(registry.path);
+    } catch {
+      // A peer IDE may be replacing its registry while discovery runs.
+      continue;
+    }
+
+    for (const meta of indexes) {
+      if (!meta || typeof meta.dbPath !== 'string' || !meta.dbPath.trim()) {
+        continue;
+      }
+      const dbKey = canonicalPathKey(meta.dbPath);
+      const existing = byDbPath.get(dbKey);
+      if (existing) {
+        if (!existing.sources.includes(registry.source)) {
+          existing.sources.push(registry.source);
+        }
+        if (meta.updatedAt > existing.meta.updatedAt) {
+          existing.meta = meta;
+        }
+        continue;
+      }
+      byDbPath.set(dbKey, {
+        meta,
+        sources: [registry.source],
+      });
+    }
+  }
+
+  return Array.from(byDbPath.values());
 }

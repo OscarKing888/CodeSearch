@@ -24,6 +24,8 @@ interface IndexListItem {
   isAttached: boolean;
   exists: boolean;
   isShared: boolean;
+  external: boolean;
+  sourceLabel?: string;
   writerLabel?: string;
   directoryMappings: DirectoryMapping[];
   mappingsText: string;
@@ -430,6 +432,9 @@ function renderBadges(item: IndexListItem, usage: IndexUsage): string {
   if (usage === 'secondary') badges.push('<span class="badge secondary">Secondary</span>');
   if (usage === 'available') badges.push('<span class="badge muted">Available</span>');
   if (item.isShared) badges.push('<span class="badge shared">Shared path</span>');
+  if (item.external && item.sourceLabel) {
+    badges.push(`<span class="badge external">${esc(item.sourceLabel)}</span>`);
+  }
   badges.push(`<span class="badge access-badge" data-access-id="${esc(item.id)}">${esc(accessLabel(item))}</span>`);
   if (item.partial) {
     badges.push(`<span class="badge progress-badge" data-progress-id="${esc(item.id)}">Working</span>`);
@@ -443,16 +448,18 @@ function renderStatus(item: IndexListItem): string {
 
 function renderActions(item: IndexListItem): string {
   const actions: string[] = [];
-  if (editingRename.has(item.id)) {
-    actions.push(`
+  if (!item.external) {
+    if (editingRename.has(item.id)) {
+      actions.push(`
       <div class="rename-row" data-id="${esc(item.id)}">
         <label class="sr-only" for="rename-${esc(item.id)}">Index name</label>
         <input id="rename-${esc(item.id)}" type="text" class="rename-input" value="${esc(renameDrafts.get(item.id) ?? item.name)}" />
         <button type="button" class="btn btn-primary rename-save" data-id="${esc(item.id)}">Save</button>
         <button type="button" class="btn rename-cancel" data-id="${esc(item.id)}">Cancel</button>
       </div>`);
-  } else {
-    actions.push(`<button type="button" class="btn btn-quiet rename-start" data-id="${esc(item.id)}">Rename</button>`);
+    } else {
+      actions.push(`<button type="button" class="btn btn-quiet rename-start" data-id="${esc(item.id)}">Rename</button>`);
+    }
   }
   actions.push(`<button type="button" class="btn settings-select" data-id="${esc(item.id)}" aria-controls="indexInspector" aria-expanded="${item.id === selectedInspectorId}" aria-pressed="${item.id === selectedInspectorId}">Settings</button>`);
   if (item.canRefresh) {
@@ -464,7 +471,7 @@ function renderActions(item: IndexListItem): string {
   if (item.usage === 'available' && item.exists) {
     actions.unshift(`<button type="button" class="btn btn-primary attach-btn" data-id="${esc(item.id)}">Open in search</button>`);
   }
-  if (item.usage === 'available') {
+  if (item.usage === 'available' && !item.external) {
     actions.push(`<button type="button" class="btn btn-danger delete-btn" data-id="${esc(item.id)}" title="Permanently delete the database and its index data">Delete</button>`);
   }
   return actions.join('');
@@ -484,16 +491,31 @@ function renderInspector(): void {
   const unrealChips = indexingRules.unrealCoreDirs.length
     ? indexingRules.unrealCoreDirs.map((dir) => `<span class="chip ue">${esc(dir)}</span>`).join('')
     : '<span class="setting-help">No Unreal Engine defaults reported.</span>';
-  const excludesReadOnly = item.readOnly;
+  const excludesReadOnly = item.readOnly || item.external;
   const readonlyAttr = excludesReadOnly ? ' readonly' : '';
+  const mappingsReadonlyAttr = item.external ? ' readonly' : '';
   const excludesDirty = dirtyExclusionDrafts.has(item.id);
   const mappingsDirty = dirtyMappingsDrafts.has(item.id);
   const excludesPending = pendingMutation?.id === item.id && pendingMutation.section === 'excludes';
   const mappingsPending = pendingMutation?.id === item.id && pendingMutation.section === 'mappings';
   const excludeSaveLabel = item.usage === 'available' ? 'Save rules' : 'Save & Reindex';
   const requestedAccess = item.requestedReadOnly ? 'Read-only' : 'Automatic (keep up to date when writer)';
-  const effectiveAccess = item.usage === 'available' ? 'Not open in this workspace' : accessLabel(item);
+  const effectiveAccess = item.external
+    ? `Registered in ${item.sourceLabel ?? 'another IDE'} · not open here`
+    : item.usage === 'available'
+      ? 'Not open in this workspace'
+      : accessLabel(item);
   const writerNote = accessNote(item);
+  const excludeFooterHelp = item.external
+    ? 'Open this index in search before editing rules in this IDE.'
+    : excludesReadOnly
+      ? 'Additional exclusions cannot be changed while this index is read-only.'
+      : 'Saving updates the rules and starts a full refresh of an active index.';
+  const mappingsFooterHelp = item.external
+    ? 'Open this index in search before editing mappings in this IDE.'
+    : 'Mappings do not rebuild the database.';
+  const showExcludeSave = !item.external;
+  const showMappingsSave = !item.external;
 
   inspectorEl.innerHTML = `
     <header class="inspector-header">
@@ -557,8 +579,12 @@ function renderInspector(): void {
             </label>
           </div>
           <div class="setting-footer">
-            <span class="setting-help">${excludesReadOnly ? 'Additional exclusions cannot be changed while this index is read-only.' : 'Saving updates the rules and starts a full refresh of an active index.'}</span>
-            <button type="button" class="btn btn-primary excludes-save" data-id="${esc(item.id)}" data-save-section="excludes"${excludesReadOnly || !excludesDirty || excludesPending ? ' disabled' : ''}>${excludesPending ? 'Saving...' : excludeSaveLabel}</button>
+            <span class="setting-help">${excludeFooterHelp}</span>
+            ${
+              showExcludeSave
+                ? `<button type="button" class="btn btn-primary excludes-save" data-id="${esc(item.id)}" data-save-section="excludes"${excludesReadOnly || !excludesDirty || excludesPending ? ' disabled' : ''}>${excludesPending ? 'Saving...' : excludeSaveLabel}</button>`
+                : ''
+            }
           </div>
         </div>
       </fieldset>
@@ -575,11 +601,15 @@ function renderInspector(): void {
             <p class="setting-help">One mapping per line: <code>indexed path =&gt; local path</code>.</p>
             <label class="field-label">
               <span class="sr-only">Directory mappings</span>
-              <textarea class="mappings" data-id="${esc(item.id)}">${esc(mappingsDrafts.get(item.id) ?? '')}</textarea>
+              <textarea class="mappings" data-id="${esc(item.id)}"${mappingsReadonlyAttr}>${esc(mappingsDrafts.get(item.id) ?? '')}</textarea>
             </label>
             <div class="setting-footer">
-              <span class="setting-help">Mappings do not rebuild the database.</span>
-              <button type="button" class="btn btn-primary mappings-save" data-id="${esc(item.id)}" data-save-section="mappings"${!mappingsDirty || mappingsPending ? ' disabled' : ''}>${mappingsPending ? 'Saving...' : 'Save mapping'}</button>
+              <span class="setting-help">${mappingsFooterHelp}</span>
+              ${
+                showMappingsSave
+                  ? `<button type="button" class="btn btn-primary mappings-save" data-id="${esc(item.id)}" data-save-section="mappings"${!mappingsDirty || mappingsPending ? ' disabled' : ''}>${mappingsPending ? 'Saving...' : 'Save mapping'}</button>`
+                  : ''
+              }
             </div>
           </div>
           <div class="access-panel">

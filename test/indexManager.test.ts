@@ -155,6 +155,7 @@ async function run(): Promise<void> {
   await runPromotionTopologyTests();
   await runDestructiveSafetyTests();
   await runConcurrentSamePathRegistryConvergenceTests();
+  await runPeerAttachRegistryLandingTests();
 
   const sharedPath = path.join(temp, 'indexes', 'takeover.db');
   fs.mkdirSync(temp, { recursive: true });
@@ -718,6 +719,57 @@ async function runPromotionTopologyTests(): Promise<void> {
     await contender.dispose();
     assert.strictEqual(fs.existsSync(`${sharedPath}.writer.lock`), false);
     assert.strictEqual(fs.existsSync(`${switchedPath}.writer.lock`), false);
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Mirrors attachExternalIndex: opening a peer-IDE dbPath that is absent from
+ * the local registry must upsert into this IDE's registry on attach.
+ */
+async function runPeerAttachRegistryLandingTests(): Promise<void> {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ace-manager-peer-attach-'));
+  const storage = path.join(temp, 'storage');
+  const sourceRoot = path.join(temp, 'source');
+  const primaryPath = path.join(temp, 'indexes', 'primary.db');
+  const peerPath = path.join(temp, 'indexes', 'peer-ide.db');
+  fs.mkdirSync(sourceRoot, { recursive: true });
+  fs.writeFileSync(path.join(sourceRoot, 'sample.ts'), 'const peerToken = 1;\n');
+
+  const manager = new IndexManager(storage, 'peer-workspace', {
+    writerLabel: 'test',
+    workspaceRoots: [sourceRoot],
+    sharedDbPath: primaryPath,
+  });
+  await manager.initialize();
+
+  try {
+    await manager.createPrimary(primaryPath, [sourceRoot], 'Primary');
+
+    const peerBuilder = new IndexService(peerPath);
+    await peerBuilder.initialize([sourceRoot]);
+    await peerBuilder.startIndexing(true);
+    peerBuilder.dispose();
+
+    assert.strictEqual(
+      manager.getRegistry().getByDbPath(peerPath),
+      undefined,
+      'peer database must start unregistered in this IDE'
+    );
+
+    const attached = await manager.attachSecondary(peerPath, {
+      name: 'From peer IDE',
+      readOnly: true,
+      rootDirs: [sourceRoot],
+      waitForInitialIndex: false,
+    });
+
+    const registered = manager.getRegistry().getByDbPath(peerPath);
+    assert.ok(registered, 'attach must land the peer database in the local registry');
+    assert.strictEqual(registered.name, 'From peer IDE');
+    assert.strictEqual(attached.id, registered.id);
+  } finally {
+    await manager.dispose();
     fs.rmSync(temp, { recursive: true, force: true });
   }
 }

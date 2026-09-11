@@ -30,6 +30,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Streaming search shows loaded vs. discovered hit counts; `codeSearch.profileSearch` off by default
 - Fail-closed migration for managed legacy Skill/rule/config; MCP feature-parity maintenance rule
 
+## [0.9.0] - 2026-09-11
+
+### Changed
+- Show peer IDE indexes in Available indexes (read-only until Open in search).
+
 ## [0.8.13] - 2026-08-20
 
 ### Changed

@@ -59,6 +59,27 @@ function run(): void {
     'duplicate catalog rows for one physical database must render once'
   );
 
+  const peerPath = path.join(root, 'peer.db');
+  const sameAsActivePeerPath = activePath;
+  const withExternal = mergeIndexCatalog(
+    [meta('available', availablePath)],
+    [meta('active', activePath, 'active service')],
+    [
+      meta('peer-only', peerPath, 'from vscode'),
+      meta('peer-same-path-different-id', sameAsActivePeerPath, 'peer duplicate'),
+      meta('peer-same-as-available', availablePath, 'peer available dup'),
+    ]
+  );
+  assert.deepStrictEqual(
+    withExternal.map((item) => [item.id, item.name]),
+    [
+      ['active', 'active service'],
+      ['available', 'available'],
+      ['peer-only', 'from vscode'],
+    ],
+    'external peer entries append after local/active and lose same-path collisions'
+  );
+
   console.log('indexCatalog tests passed');
 }
 
