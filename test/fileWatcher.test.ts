@@ -1,10 +1,14 @@
 import * as assert from 'assert';
+import { EventEmitter } from 'events';
 import * as path from 'path';
+import { minimatch } from 'minimatch';
 import {
+  ChokidarFileWatchBackend,
   FileChangeEvent,
   FileWatchBackend,
   FileWatchBackendStartOptions,
   FileWatcher,
+  VsCodeFileWatchBackend,
 } from '../src/index/FileWatcher';
 import { DEFAULT_INDEXING_SETTINGS } from '../src/indexingSettings';
 
@@ -98,8 +102,162 @@ async function testCoalesceFilterPauseResumeAndDispose(): Promise<void> {
   assert.strictEqual(backend.disposed, true);
 }
 
+async function testDirectoryDeletesSurviveFileFiltersAndOldCallbacksAreIgnored(): Promise<void> {
+  const backend = new FakeBackend();
+  const watcher = new FileWatcher({ backend, settleMs: 5 });
+  const root = path.join(process.cwd(), 'fake-watcher-root');
+  const events: Array<{ filePath: string; event: FileChangeEvent }> = [];
+  const config = {
+    ...DEFAULT_INDEXING_SETTINGS,
+    includeGlobs: ['**/*.ts'],
+    excludeDirNames: ['vendor'],
+    excludeFileNames: [],
+    excludeGlobs: [],
+  };
+  const onEvent = (filePath: string, event: FileChangeEvent): void => {
+    events.push({ filePath, event });
+  };
+
+  try {
+    watcher.start([root], config, onEvent);
+    const oldSubscription = backend.options!;
+    const sourceDir = path.join(root, 'src');
+    const previouslyIncludedDir = path.join(root, 'vendor');
+    backend.emit(sourceDir, 'unlink');
+    backend.emit(previouslyIncludedDir, 'unlink');
+    backend.emit(path.join(root, 'vendor', 'ignored.ts'), 'add');
+    await waitFor(() => events.length === 2);
+    assert.deepStrictEqual(events, [
+      { filePath: sourceDir, event: 'unlink' },
+      { filePath: previouslyIncludedDir, event: 'unlink' },
+    ]);
+
+    watcher.start([root], config, onEvent);
+    oldSubscription.onEvent(path.join(root, 'stale.ts'), 'unlink');
+    const currentFile = path.join(root, 'current.ts');
+    backend.emit(currentFile, 'change');
+    await waitFor(() => events.some((event) => event.filePath === currentFile));
+    assert.deepStrictEqual(events.slice(2), [
+      { filePath: currentFile, event: 'change' },
+    ], 'events queued by a disposed backend must not enter the new watch generation');
+  } finally {
+    watcher.stop();
+  }
+}
+
+async function testVsCodeReceivesCollapsedDirectoryDeletesWithNarrowIncludes(): Promise<void> {
+  type Uri = { fsPath: string };
+  type Listener = (uri: Uri) => void;
+  type Registration = {
+    pattern: { base: string; pattern: string };
+    listeners: Partial<Record<FileChangeEvent, Listener>>;
+    ignored: Record<FileChangeEvent, boolean>;
+    disposed: boolean;
+  };
+  const registrations: Registration[] = [];
+  const vscode = {
+    RelativePattern: class {
+      constructor(readonly base: string, readonly pattern: string) {}
+    },
+    workspace: {
+      createFileSystemWatcher(
+        pattern: Registration['pattern'],
+        ignoreCreateEvents = false,
+        ignoreChangeEvents = false,
+        ignoreDeleteEvents = false
+      ) {
+        const registration: Registration = {
+          pattern,
+          listeners: {},
+          ignored: {
+            add: ignoreCreateEvents,
+            change: ignoreChangeEvents,
+            unlink: ignoreDeleteEvents,
+          },
+          disposed: false,
+        };
+        registrations.push(registration);
+        const listen = (event: FileChangeEvent, callback: Listener) => {
+          registration.listeners[event] = callback;
+          return { dispose: () => { delete registration.listeners[event]; } };
+        };
+        return {
+          onDidCreate: (callback: Listener) => listen('add', callback),
+          onDidChange: (callback: Listener) => listen('change', callback),
+          onDidDelete: (callback: Listener) => listen('unlink', callback),
+          dispose: () => { registration.disposed = true; },
+        };
+      },
+    },
+  };
+  const emit = (filePath: string, event: FileChangeEvent): void => {
+    for (const registration of registrations) {
+      const relative = path.relative(registration.pattern.base, filePath).replace(/\\/g, '/');
+      if (!registration.ignored[event] && minimatch(relative, registration.pattern.pattern)) {
+        registration.listeners[event]?.({ fsPath: filePath });
+      }
+    }
+  };
+  const watcher = new FileWatcher({
+    backend: new VsCodeFileWatchBackend(vscode as unknown as typeof import('vscode')),
+    settleMs: 5,
+  });
+  const root = path.join(process.cwd(), 'fake-watcher-root');
+  const events: Array<{ filePath: string; event: FileChangeEvent }> = [];
+
+  try {
+    watcher.start([root, root], {
+      ...DEFAULT_INDEXING_SETTINGS,
+      includeGlobs: ['**/*.ts', '**/*.ts'],
+    }, (filePath, event) => { events.push({ filePath, event }); });
+    const sourceDir = path.join(root, 'src');
+    const sourceFile = path.join(root, 'keep.ts');
+    emit(sourceDir, 'unlink');
+    emit(sourceFile, 'change');
+    emit(path.join(root, 'skip.cpp'), 'change');
+    await waitFor(() => events.length === 2);
+    assert.deepStrictEqual(events, [
+      { filePath: sourceDir, event: 'unlink' },
+      { filePath: sourceFile, event: 'change' },
+    ]);
+    assert.strictEqual(registrations.length, 2, 'duplicate roots and include globs need no duplicate watchers');
+  } finally {
+    watcher.stop();
+  }
+  assert.ok(registrations.every((registration) => registration.disposed));
+}
+
+async function testChokidarForwardsDirectoryDeletes(): Promise<void> {
+  const chokidar = require('chokidar') as typeof import('chokidar');
+  const originalWatch = chokidar.watch;
+  const nativeWatcher = new EventEmitter() as EventEmitter & { close(): Promise<void> };
+  let closed = false;
+  nativeWatcher.close = async () => { closed = true; };
+  const watcher = new FileWatcher({ backend: new ChokidarFileWatchBackend(), settleMs: 5 });
+  const root = path.join(process.cwd(), 'fake-watcher-root');
+  const events: Array<{ filePath: string; event: FileChangeEvent }> = [];
+  try {
+    chokidar.watch = (() => nativeWatcher) as unknown as typeof chokidar.watch;
+    watcher.start([root], {
+      ...DEFAULT_INDEXING_SETTINGS,
+      includeGlobs: ['**/*.ts'],
+    }, (filePath, event) => { events.push({ filePath, event }); });
+    const sourceDir = path.join(root, 'src');
+    nativeWatcher.emit('unlinkDir', sourceDir);
+    await waitFor(() => events.length === 1);
+    assert.deepStrictEqual(events, [{ filePath: sourceDir, event: 'unlink' }]);
+  } finally {
+    chokidar.watch = originalWatch;
+    watcher.stop();
+  }
+  assert.strictEqual(closed, true);
+}
+
 async function main(): Promise<void> {
   await testCoalesceFilterPauseResumeAndDispose();
+  await testDirectoryDeletesSurviveFileFiltersAndOldCallbacksAreIgnored();
+  await testVsCodeReceivesCollapsedDirectoryDeletesWithNarrowIncludes();
+  await testChokidarForwardsDirectoryDeletes();
   console.log('fileWatcher tests passed');
 }
 

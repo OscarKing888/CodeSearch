@@ -7,6 +7,8 @@ import { FileRecord, IndexProgress, IndexStatus } from '../types';
 import { mergeIndexingSettings, PerIndexExcludes } from './excludePatterns';
 import {
   extractTokens,
+  isMissingFileError,
+  isUnderRoot,
   readFileForIndex,
   shouldIndexFile,
   shouldPathRemainInIndex,
@@ -52,6 +54,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_files_path_nocase ON files(path COLLATE NOCASE);
 ${TOKEN_AUTOCOMPLETE_INDEX_SQL}
 `;
 const BATCH_SIZE = 100;
@@ -341,7 +344,9 @@ export class IndexService extends EventEmitter {
     this.pauseCount--;
     if (this.pauseCount === 0) {
       this.paused = false;
-      this.watcher.resume();
+      if (!this.indexing) {
+        this.watcher.resume();
+      }
     }
   }
 
@@ -360,18 +365,20 @@ export class IndexService extends EventEmitter {
     try {
       this.writeIndexBuildState('building');
       this.indexing = true;
+      // Keep events that arrive during scanning, but replay them after batch
+      // writes so a previously read record cannot resurrect a deleted file.
+      this.watcher.pause();
+      const config = this.getEffectiveSettings();
+      this.startWatcher(config, generation);
+      const stalePaths = new Set(
+        (this.db.prepare('SELECT path FROM files').all() as { path: string }[])
+          .map((row) => row.path)
+      );
       this.setStatus('scanning');
       this.indexed = 0;
       this.queued = 0;
       this.scanned = 0;
       this.emit('progress', this.getProgress());
-      const config = this.getEffectiveSettings();
-      if (forceAll) {
-        await this.purgeStaleEntries(config, cancelled);
-        if (cancelled()) {
-          return;
-        }
-      }
       const filesSet = new Set<string>();
 
       for (const root of this.rootDirs) {
@@ -379,9 +386,13 @@ export class IndexService extends EventEmitter {
           if (cancelled()) {
             return;
           }
-          if (this.paused) {
+          while (this.paused && !cancelled()) {
             await this.sleep(100);
           }
+          if (cancelled()) {
+            return;
+          }
+          stalePaths.delete(filePath);
           this.scanned++;
           if (this.scanned % 50 === 0) {
             this.emit('progress', this.getProgress());
@@ -397,6 +408,7 @@ export class IndexService extends EventEmitter {
                   continue;
                 }
               } catch {
+                stalePaths.add(filePath);
                 continue;
               }
             }
@@ -424,7 +436,7 @@ export class IndexService extends EventEmitter {
         }
 
         const batch = filesToIndex.slice(i, i + BATCH_SIZE);
-        const results = await mapWithConcurrency(batch, threadCount, readFileForIndex, {
+        const results = await mapWithConcurrency(batch, threadCount, (filePath) => readFileForIndex(filePath), {
           shouldPause: () => this.paused && !cancelled(),
           onPause: () => this.sleep(200),
         });
@@ -432,6 +444,11 @@ export class IndexService extends EventEmitter {
           return;
         }
         const records = results.filter((r): r is FileRecord => r !== null);
+        results.forEach((record, index) => {
+          if (!record) {
+            stalePaths.add(batch[index]);
+          }
+        });
 
         this.indexBatch(records, generation);
         this.indexed += batch.length;
@@ -442,10 +459,12 @@ export class IndexService extends EventEmitter {
       if (cancelled()) {
         return;
       }
-      // Do not advertise an idle index until the watcher is registered. On
-      // VS Code/Cursor this uses the editor file service instead of walking
-      // the workspace again in the extension host.
-      this.startWatcher(config, generation);
+      // Reconcile every scan, including ordinary startup after offline deletes.
+      // Only stat unseen paths; unchanged files were already checked by scanning.
+      await this.purgeStaleEntries(config, cancelled, stalePaths);
+      if (cancelled()) {
+        return;
+      }
       this.writeIndexBuildState('complete');
       completed = true;
     } catch (error) {
@@ -458,6 +477,9 @@ export class IndexService extends EventEmitter {
       if (generation === this.indexingGeneration) {
         this.indexing = false;
         this.activeThreadCount = 1;
+        if (!this.paused && !this.disposed) {
+          this.watcher.resume();
+        }
         if (failed && !this.disposed) {
           this.tryWriteIndexBuildState('failed');
           this.setStatus('idle');
@@ -515,23 +537,41 @@ export class IndexService extends EventEmitter {
     if (!this.isWriteGenerationActive(generation)) {
       return;
     }
+    let stat: fs.Stats;
     try {
-      const stat = await fs.promises.stat(filePath);
-      if (!this.isWriteGenerationActive(generation)) {
-        return;
-      }
-      if (!shouldIndexFile(filePath, config, stat.size)) {
-        this.removeFile(filePath, generation);
-        return;
-      }
-    } catch {
-      if (this.isWriteGenerationActive(generation)) {
+      stat = await fs.promises.stat(filePath);
+    } catch (error) {
+      if (isMissingFileError(error) && this.isWriteGenerationActive(generation)) {
         this.removeFile(filePath, generation);
       }
       return;
     }
+    if (!this.isWriteGenerationActive(generation)) {
+      return;
+    }
+    if (stat.isDirectory()) {
+      // A directory delete/recreate can coalesce into an add event. Its old
+      // children still need reconciliation even though the directory exists.
+      await this.removeDeletedPath(filePath, config, generation);
+      if (this.isWriteGenerationActive(generation)) {
+        this.emit('progress', this.getProgress());
+      }
+      return;
+    }
+    if (!shouldIndexFile(filePath, config, stat.size)) {
+      this.removeFile(filePath, generation);
+      return;
+    }
 
-    const record = await readFileForIndex(filePath);
+    let record: FileRecord | null;
+    try {
+      record = await readFileForIndex(filePath, true);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        this.removeFile(filePath, generation);
+      }
+      return;
+    }
     if (!this.isWriteGenerationActive(generation)) {
       return;
     }
@@ -549,8 +589,10 @@ export class IndexService extends EventEmitter {
     if (!this.isWriteGenerationActive(generation) || !this.db) {
       return;
     }
-    this.deleteFtsStmt?.run(filePath);
-    this.deleteFileStmt?.run(filePath);
+    this.db.transaction(() => {
+      this.deleteFtsStmt?.run(filePath);
+      this.deleteFileStmt?.run(filePath);
+    })();
   }
 
   private isWriteGenerationActive(generation: number): boolean {
@@ -564,15 +606,39 @@ export class IndexService extends EventEmitter {
 
   private async purgeStaleEntries(
     config: IndexingSettings,
-    cancelled: () => boolean = () => this.disposed
+    cancelled: () => boolean = () => this.disposed,
+    paths?: Iterable<string>
   ): Promise<void> {
     if (!this.db || this.readOnly) {
       return;
     }
-    const rows = this.db.prepare('SELECT path FROM files').all() as { path: string }[];
-    for (const { path: filePath } of rows) {
+    // A disconnected drive/root must not turn startup into a whole-index purge.
+    // Explicit watcher deletes are handled separately by removeDeletedPath.
+    const availableRoots: string[] = [];
+    for (const root of this.rootDirs) {
       if (cancelled()) {
         return;
+      }
+      try {
+        if ((await fs.promises.stat(root)).isDirectory()) {
+          availableRoots.push(root);
+        }
+      } catch {
+        // Retain this root's snapshot until it can be checked again.
+      }
+    }
+    const stalePaths = paths ??
+      (this.db.prepare('SELECT path FROM files').all() as { path: string }[])
+        .map((row) => row.path);
+    for (const filePath of stalePaths) {
+      while (this.paused && !cancelled()) {
+        await this.sleep(100);
+      }
+      if (cancelled()) {
+        return;
+      }
+      if (isUnderRoot(filePath, this.rootDirs) && !isUnderRoot(filePath, availableRoots)) {
+        continue;
       }
       const remain = await shouldPathRemainInIndex(filePath, this.rootDirs, config);
       if (cancelled()) {
@@ -606,7 +672,7 @@ export class IndexService extends EventEmitter {
       return;
     }
     if (event === 'unlink') {
-      this.removeFile(filePath, generation);
+      await this.removeDeletedPath(filePath, config, generation);
       if (this.isWriteGenerationActive(generation)) {
         this.emit('progress', this.getProgress());
       }
@@ -615,11 +681,49 @@ export class IndexService extends EventEmitter {
     await this.indexSingleFile(filePath, config, generation);
   }
 
+  private async removeDeletedPath(
+    filePath: string,
+    config: IndexingSettings,
+    generation: number
+  ): Promise<void> {
+    if (!this.isWriteGenerationActive(generation) || !this.db) {
+      return;
+    }
+    const normalized = path.normalize(filePath);
+    const prefix = normalized.endsWith(path.sep) ? normalized : `${normalized}${path.sep}`;
+    // A folder deletion may produce just one event. Use the indexed prefix
+    // (including its separator), escaping LIKE metacharacters in real names.
+    // NOCASE also handles drive/workspace casing reported by Windows watchers.
+    const descendants = `${prefix.replace(/[!%_]/g, '!$&')}%`;
+    const rows = this.db.prepare(`
+      SELECT path FROM files
+      WHERE path = ? COLLATE NOCASE OR path LIKE ? ESCAPE '!'
+    `).all(normalized, descendants) as { path: string }[];
+    for (const row of rows) {
+      while (this.paused && this.isWriteGenerationActive(generation)) {
+        await this.sleep(100);
+      }
+      if (!this.isWriteGenerationActive(generation)) {
+        return;
+      }
+      const remain = await shouldPathRemainInIndex(row.path, this.rootDirs, config);
+      if (!this.isWriteGenerationActive(generation)) {
+        return;
+      }
+      if (!remain) {
+        // Delete using the stored spelling, not the event's potentially different casing.
+        this.removeFile(row.path, generation);
+      } else if (row.path.toLowerCase() === normalized.toLowerCase()) {
+        // A delayed unlink can arrive after an atomic save or delete/recreate.
+        await this.indexSingleFile(row.path, config, generation);
+      }
+    }
+  }
+
   async refresh(forceAll = false): Promise<void> {
     if (this.readOnly || this.disposed) {
       return;
     }
-    this.watcher.stop();
     await this.startIndexing(forceAll);
   }
 

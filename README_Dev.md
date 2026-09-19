@@ -339,7 +339,10 @@ Manual smoke test: open the same workspace in VS Code and Cursor, select the sha
 - VS Code/Cursor 使用编辑器原生 `FileSystemWatcher`，递归监听在文件服务进程执行
 - CLI 保留 chokidar fallback
 - include/exclude matcher 只编译一次；搜索期间暂停索引更新，结束后分批排空
-- 监听器就绪后才显示 **Up to date**
+- 扫描前注册监听器并暂存事件，批量写入结束后再处理，避免扫描期间删除的文件被旧读取结果写回
+- 删除监听使用独立 `**`，不受文件 include 规则限制；目录删除只上报父目录时，也会清理索引中的已删除子文件，CLI 同步处理 `unlinkDir`
+- 普通启动和刷新会补查扫描未遇到的旧记录，清除离线期间删除的文件；根目录暂时不可访问或出现权限/I/O 错误时保留快照，恢复访问后再核对。同路径已重建的文件不会被晚到的删除事件误删
+- `test/fileWatcher.test.ts` / `test/indexDeletion.test.ts` 覆盖删除、重建与扫描竞态；真实 VS Code/Cursor 事件投递及 Windows 文件系统仍需手工验证。MCP 继续只读共享索引，自动反映可写服务的清理结果
 
 **流式搜索与结果面板**
 
@@ -669,7 +672,7 @@ tokenize='unicode61 remove_diacritics 0'
 2. **批量事务**：每 100 个文件 commit 一次
 3. 每个文件：`INSERT/UPDATE files` → 更新 `files_fts`（先删后插）→ 用正则 `/[a-zA-Z_][a-zA-Z0-9_]*/g` 提取标识符写入 `tokens`（每文件最多 500 个，长度 ≥2）
 4. **并发读盘**：可配置 `codeSearch.indexThreads`；搜索时 `pause()` 索引以降低 IO 争抢
-5. **增量更新**：`chokidar` 监视文件增删改，单文件重索引
+5. **增量更新**：编辑器原生监听（CLI 为 `chokidar`）处理文件增删改；文件和目录删除先核对磁盘，再事务删除 `files` / `files_fts` 记录
 
 数据库使用 WAL 模式（`journal_mode = WAL`），默认路径见上文「索引存储位置」。
 

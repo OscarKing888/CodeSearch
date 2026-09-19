@@ -64,6 +64,8 @@ export class FileWatcher {
     this.stop();
     this.handler = handler;
     this.matcher = getIndexingMatcher(config);
+    const matcher = this.matcher;
+    const generation = this.generation;
     const normalizedRoots = rootDirs.map((root) => path.normalize(root));
 
     this.subscription = this.backend.start({
@@ -74,9 +76,13 @@ export class FileWatcher {
         if (normalizedRoots.some((root) => pathsEqual(root, normalized))) {
           return false;
         }
-        return this.matcher?.isPathIgnored(normalized, isDirectory) ?? true;
+        return matcher.isPathIgnored(normalized, isDirectory);
       },
-      onEvent: (filePath, event) => this.acceptEvent(filePath, event),
+      onEvent: (filePath, event) => {
+        if (generation === this.generation) {
+          this.acceptEvent(filePath, event);
+        }
+      },
     });
   }
 
@@ -114,7 +120,10 @@ export class FileWatcher {
     }
 
     const normalized = path.normalize(filePath);
-    if (matcher.isPathIgnored(normalized) || !matcher.matchesIncludeGlob(normalized)) {
+    // A delete can name a parent directory rather than its contained files.
+    // Even paths excluded by today's settings can still have indexed rows.
+    if (event !== 'unlink' &&
+      (matcher.isPathIgnored(normalized) || !matcher.matchesIncludeGlob(normalized))) {
       return;
     }
 
@@ -282,7 +291,7 @@ function tryGetVsCodeApi(): VsCodeApi | undefined {
   return undefined;
 }
 
-class VsCodeFileWatchBackend implements FileWatchBackend {
+export class VsCodeFileWatchBackend implements FileWatchBackend {
   constructor(private readonly vscode: VsCodeApi) {}
 
   start(options: FileWatchBackendStartOptions): FileWatchBackendSubscription {
@@ -290,23 +299,35 @@ class VsCodeFileWatchBackend implements FileWatchBackend {
     const registrations = new Set<string>();
 
     for (const rootDir of options.rootDirs) {
-      for (const includeGlob of options.includeGlobs) {
-        const key = `${pathKey(rootDir)}\0${includeGlob}`;
-        if (registrations.has(key)) {
-          continue;
-        }
-        registrations.add(key);
+      const rootKey = pathKey(rootDir);
+      if (registrations.has(rootKey)) {
+        continue;
+      }
+      registrations.add(rootKey);
 
+      // VS Code folds recursive deletes into the parent folder event. A
+      // file-only include glob (e.g. **/*.cpp) cannot receive that event.
+      const deleteWatcher = this.vscode.workspace.createFileSystemWatcher(
+        new this.vscode.RelativePattern(rootDir, '**'),
+        true,
+        true,
+        false
+      );
+      disposables.push(
+        deleteWatcher.onDidDelete((uri) => options.onEvent(uri.fsPath, 'unlink')),
+        deleteWatcher
+      );
+
+      for (const includeGlob of new Set(options.includeGlobs)) {
         const watcher = this.vscode.workspace.createFileSystemWatcher(
           new this.vscode.RelativePattern(rootDir, includeGlob),
           false,
           false,
-          false
+          true
         );
         disposables.push(
           watcher.onDidCreate((uri) => options.onEvent(uri.fsPath, 'add')),
           watcher.onDidChange((uri) => options.onEvent(uri.fsPath, 'change')),
-          watcher.onDidDelete((uri) => options.onEvent(uri.fsPath, 'unlink')),
           watcher
         );
       }
@@ -322,7 +343,7 @@ class VsCodeFileWatchBackend implements FileWatchBackend {
   }
 }
 
-class ChokidarFileWatchBackend implements FileWatchBackend {
+export class ChokidarFileWatchBackend implements FileWatchBackend {
   start(options: FileWatchBackendStartOptions): FileWatchBackendSubscription {
     if (options.rootDirs.length === 0 || options.includeGlobs.length === 0) {
       return { dispose: () => undefined };
@@ -344,6 +365,7 @@ class ChokidarFileWatchBackend implements FileWatchBackend {
     watcher.on('add', (filePath) => options.onEvent(filePath, 'add'));
     watcher.on('change', (filePath) => options.onEvent(filePath, 'change'));
     watcher.on('unlink', (filePath) => options.onEvent(filePath, 'unlink'));
+    watcher.on('unlinkDir', (filePath) => options.onEvent(filePath, 'unlink'));
 
     return {
       dispose: () => {

@@ -30,6 +30,12 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Streaming search shows loaded vs. discovered hit counts; `codeSearch.profileSearch` off by default
 - Fail-closed migration for managed legacy Skill/rule/config; MCP feature-parity maintenance rule
 
+## [0.9.2] - 2026-09-19
+
+### Changed
+- Fix stale index entries after offline file deletion, directory deletion, and deletion during indexing.
+- Preserve recreated files and existing snapshots during temporary filesystem or permission failures; add deletion regression coverage.
+
 ## [0.9.1] - 2026-09-11
 
 ### Changed

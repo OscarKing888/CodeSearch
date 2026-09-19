@@ -92,8 +92,10 @@ export async function shouldPathRemainInIndex(
       return false;
     }
     return shouldIndexFile(filePath, config, stat.size, matcher);
-  } catch {
-    return false;
+  } catch (error) {
+    // An unavailable share or a temporary permission error is not evidence of
+    // deletion. Keep the snapshot unless the path is definitely absent.
+    return !isMissingFileError(error);
   }
 }
 
@@ -139,7 +141,15 @@ export function shouldIndexFile(
   return sizeBytes < 512 * 1024;
 }
 
-export async function readFileForIndex(filePath: string): Promise<FileRecord | null> {
+export function isMissingFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+export async function readFileForIndex(
+  filePath: string,
+  throwOnError = false
+): Promise<FileRecord | null> {
   try {
     const stat = await fs.promises.stat(filePath);
     if (!stat.isFile()) {
@@ -167,7 +177,10 @@ export async function readFileForIndex(filePath: string): Promise<FileRecord | n
       dir,
       content,
     };
-  } catch {
+  } catch (error) {
+    if (throwOnError) {
+      throw error;
+    }
     return null;
   }
 }
