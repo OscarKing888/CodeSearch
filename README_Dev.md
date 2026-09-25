@@ -134,6 +134,8 @@ The guidance prefers indexed MCP tools for code discovery, but requires `rg`/fil
 
 推送 `v*` 标签后，GitHub Actions 会自动完成跨平台原生模块编译、打包 `.vsix`、创建 GitHub Release，并发布到 VS Code Marketplace。
 
+Linux Electron 构建保留 Ubuntu 22.04 运行库基线，并明确使用 Clang 15；GCC 11 无法解析 Electron 43 V8 头文件中的 deprecated/visibility 属性组合。本地 Linux 源码构建可安装 `clang-15` 后执行 `CC=clang-15 CXX=clang++-15 node scripts/rebuild-electron.js all`。编译器覆盖只作用于 Electron CI，Node-native 保持原工具链；测试和打包任务固定为 `ubuntu-24.04`。工具链修改必须经过实际 Linux Electron 构建验证，不能只依赖 macOS 构建。
+
 ### 一次性准备
 
 下面是从 0 开始配置 VS Code Marketplace 发布权限的 SOP。只需要做一次；之后发版由 GitHub Actions 读取 `VSCE_PAT` 自动发布。

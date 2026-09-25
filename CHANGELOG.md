@@ -16,6 +16,7 @@ All notable changes to the Ace Code Search extension are documented in this file
 
 ### Fixed
 
+- Build Linux Electron 43 native modules with Clang 15 on Ubuntu 22.04 to avoid GCC 11 V8 header errors; pin test/package runners to Ubuntu 24.04.
 - Batch stale-file cleanup scans FTS paths once and deletes by rowid, avoiding repeated full-index scans for removed worktrees; startup clears stale entries before lengthy content updates.
 - `ext:h,cpp,inc`, safe `file:` / `dir:` standard globs, standalone quote-aware filter parsing, mapped-path filtering, and false negatives caused by truncating candidates before post-filters
 - Cursor/Windows MCP roots compatibility, scope refresh after roots changes, fail-closed on invalid roots

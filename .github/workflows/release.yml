@@ -26,7 +26,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -73,7 +73,16 @@ jobs:
 
       - name: Install native build prerequisites (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y python3 make g++ libsqlite3-dev
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 make g++ clang-15 libsqlite3-dev
+          # Electron 43 V8 headers combine deprecated/visibility attributes that GCC 11 rejects.
+          # Keep Ubuntu 22.04's runtime baseline; select Clang for this job only.
+          echo "CC=clang-15" >> "$GITHUB_ENV"
+          echo "CXX=clang++-15" >> "$GITHUB_ENV"
+          clang-15 --version
+          clang++-15 --version
 
       - run: npm ci
 
@@ -161,7 +170,7 @@ jobs:
     needs:
       - build-electron-native
       - build-node-native
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
