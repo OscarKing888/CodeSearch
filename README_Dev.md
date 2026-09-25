@@ -342,6 +342,7 @@ Manual smoke test: open the same workspace in VS Code and Cursor, select the sha
 - 扫描前注册监听器并暂存事件，批量写入结束后再处理，避免扫描期间删除的文件被旧读取结果写回
 - 删除监听使用独立 `**`，不受文件 include 规则限制；目录删除只上报父目录时，也会清理索引中的已删除子文件，CLI 同步处理 `unlinkDir`
 - 普通启动和刷新会补查扫描未遇到的旧记录，清除离线期间删除的文件；根目录暂时不可访问或出现权限/I/O 错误时保留快照，恢复访问后再核对。同路径已重建的文件不会被晚到的删除事件误删
+- 大批删除先分页读取一次 FTS 的 `path/rowid`，再按 rowid 定位删除；不能逐路径执行 FTS `DELETE WHERE path = ?`，因为 `path UNINDEXED` 会反复扫描整库。兼容历史 FTS rowid 与 `files.id` 不一致、同路径重复 FTS 行；分页可暂停/取消，真正删除前再次核验磁盘。启动时在耗时的内容更新前先清理离线残留，覆盖 `test/bulkIndexCleanup.test.ts`
 - `test/fileWatcher.test.ts` / `test/indexDeletion.test.ts` 覆盖删除、重建与扫描竞态；真实 VS Code/Cursor 事件投递及 Windows 文件系统仍需手工验证。MCP 继续只读共享索引，自动反映可写服务的清理结果
 
 **流式搜索与结果面板**

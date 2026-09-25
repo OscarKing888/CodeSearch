@@ -58,6 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_files_path_nocase ON files(path COLLATE NOCASE);
 ${TOKEN_AUTOCOMPLETE_INDEX_SQL}
 `;
 const BATCH_SIZE = 100;
+const CLEANUP_FTS_PAGE_SIZE = 2048;
 export const INDEX_BUILD_STATE_META_KEY = 'indexBuildStateV1';
 export type IndexBuildState = 'building' | 'complete' | 'failed' | 'unknown';
 
@@ -417,6 +418,13 @@ export class IndexService extends EventEmitter {
         }
       }
 
+      // Clear offline deletions before potentially lengthy content updates.
+      // Failed reads below get a second reconciliation after their batches.
+      await this.purgeStaleEntries(config, cancelled, stalePaths);
+      if (cancelled()) {
+        return;
+      }
+      stalePaths.clear();
       const filesToIndex = Array.from(filesSet);
 
       this.emit('progress', this.getProgress());
@@ -630,24 +638,13 @@ export class IndexService extends EventEmitter {
     const stalePaths = paths ??
       (this.db.prepare('SELECT path FROM files').all() as { path: string }[])
         .map((row) => row.path);
-    for (const filePath of stalePaths) {
-      while (this.paused && !cancelled()) {
-        await this.sleep(100);
-      }
-      if (cancelled()) {
-        return;
-      }
-      if (isUnderRoot(filePath, this.rootDirs) && !isUnderRoot(filePath, availableRoots)) {
-        continue;
-      }
-      const remain = await shouldPathRemainInIndex(filePath, this.rootDirs, config);
-      if (cancelled()) {
-        return;
-      }
-      if (!remain) {
-        this.removeFile(filePath);
-      }
+    if (cancelled()) {
+      return;
     }
+    const candidates = Array.from(stalePaths).filter((filePath) =>
+      !isUnderRoot(filePath, this.rootDirs) || isUnderRoot(filePath, availableRoots)
+    );
+    await this.reconcileIndexedFiles(candidates, config, this.indexingGeneration);
   }
 
   private startWatcher(
@@ -699,23 +696,80 @@ export class IndexService extends EventEmitter {
       SELECT path FROM files
       WHERE path = ? COLLATE NOCASE OR path LIKE ? ESCAPE '!'
     `).all(normalized, descendants) as { path: string }[];
-    for (const row of rows) {
+    await this.reconcileIndexedFiles(rows.map((row) => row.path), config, generation, normalized);
+  }
+
+  private async reconcileIndexedFiles(
+    filePaths: string[],
+    config: IndexingSettings,
+    generation: number,
+    refreshPath?: string
+  ): Promise<void> {
+    if (filePaths.length === 0 || !this.isWriteGenerationActive(generation) || !this.db) {
+      return;
+    }
+    const db = this.db;
+    const wanted = new Set(filePaths);
+    const ftsRows = new Map<string, number[]>();
+    // FTS path is UNINDEXED: deleting N paths separately scans the entire
+    // content table N times. Read its path/rowid pairs once, in yielding pages.
+    // FTS rowids need not equal files.id, and legacy paths may have duplicates.
+    const firstPage = db.prepare('SELECT rowid, path FROM files_fts ORDER BY rowid LIMIT ?');
+    const nextPage = db.prepare(
+      'SELECT rowid, path FROM files_fts WHERE rowid > ? ORDER BY rowid LIMIT ?'
+    );
+    let afterRowid: number | undefined;
+    while (true) {
       while (this.paused && this.isWriteGenerationActive(generation)) {
         await this.sleep(100);
       }
       if (!this.isWriteGenerationActive(generation)) {
         return;
       }
-      const remain = await shouldPathRemainInIndex(row.path, this.rootDirs, config);
-      if (!this.isWriteGenerationActive(generation)) {
-        return;
+      const page = (afterRowid === undefined
+        ? firstPage.all(CLEANUP_FTS_PAGE_SIZE)
+        : nextPage.all(afterRowid, CLEANUP_FTS_PAGE_SIZE)) as { rowid: number; path: string }[];
+      for (const row of page) {
+        if (wanted.has(row.path)) {
+          const ids = ftsRows.get(row.path) ?? [];
+          ids.push(row.rowid);
+          ftsRows.set(row.path, ids);
+        }
       }
+      if (page.length < CLEANUP_FTS_PAGE_SIZE) {
+        break;
+      }
+      afterRowid = page[page.length - 1].rowid;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+
+    const deleteFtsRow = db.prepare('DELETE FROM files_fts WHERE rowid = ? AND path = ?');
+    const remove = db.transaction((filePath: string) => {
+      for (const rowid of ftsRows.get(filePath) ?? []) {
+        deleteFtsRow.run(rowid, filePath);
+      }
+      this.deleteFileStmt?.run(filePath);
+    });
+    for (const filePath of wanted) {
+      let remain: boolean;
+      do {
+        while (this.paused && this.isWriteGenerationActive(generation)) {
+          await this.sleep(100);
+        }
+        if (!this.isWriteGenerationActive(generation)) {
+          return;
+        }
+        // Check AFTER the FTS scan or any search pause, so recreated files survive.
+        remain = await shouldPathRemainInIndex(filePath, this.rootDirs, config);
+        if (!this.isWriteGenerationActive(generation)) {
+          return;
+        }
+      } while (this.paused);
       if (!remain) {
-        // Delete using the stored spelling, not the event's potentially different casing.
-        this.removeFile(row.path, generation);
-      } else if (row.path.toLowerCase() === normalized.toLowerCase()) {
+        remove(filePath);
+      } else if (refreshPath && filePath.toLowerCase() === refreshPath.toLowerCase()) {
         // A delayed unlink can arrive after an atomic save or delete/recreate.
-        await this.indexSingleFile(row.path, config, generation);
+        await this.indexSingleFile(filePath, config, generation);
       }
     }
   }

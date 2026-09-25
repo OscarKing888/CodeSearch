@@ -16,6 +16,7 @@ All notable changes to the Ace Code Search extension are documented in this file
 
 ### Fixed
 
+- Batch stale-file cleanup scans FTS paths once and deletes by rowid, avoiding repeated full-index scans for removed worktrees; startup clears stale entries before lengthy content updates.
 - `ext:h,cpp,inc`, safe `file:` / `dir:` standard globs, standalone quote-aware filter parsing, mapped-path filtering, and false negatives caused by truncating candidates before post-filters
 - Cursor/Windows MCP roots compatibility, scope refresh after roots changes, fail-closed on invalid roots
 - Cursor zero-tool snapshot recovery; local packages include Cursor helper Node ABI; MCP launcher and legacy entrypoints re-exec to compatible Node 20/22/24 when PATH Node ABI mismatches packaged `native-node/` (for example Node 23), preserving script arguments across macOS/Linux/Windows
