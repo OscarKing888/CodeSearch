@@ -1,3 +1,4 @@
+**/video/
 .dist
 
 # Logs
@@ -151,3 +152,4 @@ vite.config.ts.timestamp-*
 *.vsix
 *.db
 .DS_Store
+.agents/skills/ace-code-search-mcp/.ace-code-search-managed.json

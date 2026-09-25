@@ -13,6 +13,8 @@
 - Release workflow JavaScript steps use Node 24 action runtimes: `actions/checkout@v5`, `actions/setup-node@v5`, `actions/upload-artifact@v6`, `actions/download-artifact@v7`, and `softprops/action-gh-release@v3`. The `setup-node` matrix still installs project runtimes Node 20/22/24 as declared.
 - Local packaging needs Node 20+. Windows `build.bat` / `install.bat` run `scripts/ensure-node.ps1` (may download Node 24 into ignored `.tools/` — keep it out of git and VSIX). Prefer `npm run package` over raw `npx @vscode/vsce ... https://...` in batch (URL args misparse after VSIX creation). Keep `scripts/check-node-version.js`. Useful: `npm ci`, `npm test`, `npx tsc --noEmit`, `node scripts/rebuild-electron.js all`, `npm run rebuild:node:detected`, `npm run validate:native`, `npm run test:native`, `npm run package`. Single-platform `validate:native` needs the full cross-platform matrix already merged into `native/`.
 
+- Local video assets and their dependencies stay out of Git and the VSIX: keep `**/video/` in `.gitignore` and `**/video/**` in `.vscodeignore`. VSIX uses its own ignore list, so a Git-only exclusion is insufficient. Keep the local `.ace-code-search-managed.json` install marker untracked. Verify with `npx vsce ls` when changing packaging exclusions.
+
 ## Local VSIX install
 
 - `安装CodeSearch.bat` / `install-extension.sh` uninstall `OscarKing888.ace-code-search` (and lowercase id) and delete leftover `oscarking888.ace-code-search-*` under VS Code/Cursor extensions dirs before install; Marketplace blocks `--force` alone, and stale folders can leave the UI on an older version.
