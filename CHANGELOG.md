@@ -30,6 +30,11 @@ All notable changes to the Ace Code Search extension are documented in this file
 - Streaming search shows loaded vs. discovered hit counts; `codeSearch.profileSearch` off by default
 - Fail-closed migration for managed legacy Skill/rule/config; MCP feature-parity maintenance rule
 
+## [0.9.3] - 2026-09-25
+
+### Changed
+- Include Electron 43 (ABI 148) native binaries on macOS arm64/x64, Windows x64, and Linux x64; retain older ABIs and reject incomplete release packages.
+
 ## [0.9.2] - 2026-09-19
 
 ### Changed

@@ -133,6 +133,8 @@ The guidance prefers indexed MCP tools for code discovery, but requires `rg`/fil
 
 Pushing a `v*` tag triggers GitHub Actions to build cross-platform native modules, package the `.vsix`, create a GitHub Release, and publish to the VS Code Marketplace.
 
+The fixed Electron targets include 37/40/42/43 (ABIs 136/143/146/148), retaining older editor compatibility. Release validation requires 28 native entries across Windows x64, Linux x64, and macOS arm64/x64 (16 Electron plus 12 Node); artifact and VSIX regression tests reject packages missing ABI 148 on any platform. Native loading must also be verified on the corresponding platform/CI runner.
+
 ### One-time setup
 
 Below is the SOP for configuring VS Code Marketplace publish permissions from scratch. Do this once; subsequent releases use GitHub Actions with `VSCE_PAT`.

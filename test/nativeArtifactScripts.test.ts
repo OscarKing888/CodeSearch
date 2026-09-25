@@ -15,6 +15,12 @@ const { validateNativeArtifacts } = require('../scripts/validate-native-artifact
 const { cursorHelperNodePath } = require('../scripts/rebuild-node') as {
   cursorHelperNodePath(cliPath: string, platform?: NodeJS.Platform): string;
 };
+const { supportedTargetsFor } = require('../scripts/rebuild-electron') as {
+  supportedTargetsFor(target: string): Array<{ electronVersion: string }>;
+};
+const { getAbi } = require('node-abi') as {
+  getAbi(version: string, runtime: string): string;
+};
 
 function writeBinary(root: string, artifactName: string, tag: string): void {
   const dir = path.join(root, artifactName, tag);
@@ -29,6 +35,12 @@ function main(): void {
   fs.mkdirSync(artifactsDir, { recursive: true });
 
   try {
+    // CI must build every required ABI even without a locally installed editor.
+    const fixedAbis = supportedTargetsFor('all').map(({ electronVersion }) =>
+      getAbi(electronVersion, 'electron')
+    );
+    assert.deepStrictEqual([...new Set(fixedAbis)].sort(), [...matrix.ELECTRON_ABIS].sort());
+    assert.ok(fixedAbis.includes('148'), 'Electron 43 must be in the fixed release targets');
     assert.strictEqual(
       cursorHelperNodePath(
         'C:\\Program Files\\cursor\\resources\\app\\bin\\cursor.cmd',
@@ -96,6 +108,16 @@ function main(): void {
       ),
       'Node ABI binaries must never be merged into the Electron directory'
     );
+    for (const target of matrix.RELEASE_TARGETS) {
+      const binary = path.join(
+        outputRoot, 'native', `${target.platform}-${target.arch}-148`, 'better_sqlite3.node'
+      );
+      fs.unlinkSync(binary);
+      assert.deepStrictEqual(validateNativeArtifacts(outputRoot).failures, [
+        { kind: 'missing', label: 'Electron', file: binary },
+      ], 'Every release platform must require ABI 148');
+      fs.writeFileSync(binary, Buffer.from([1]));
+    }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

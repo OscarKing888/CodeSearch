@@ -17,7 +17,9 @@ const matrix = require('../scripts/native-matrix') as {
   expectedNodeTags(): string[];
 };
 
-async function writeSyntheticVsix(vsixPath: string, repoRoot: string): Promise<void> {
+async function writeSyntheticVsix(
+  vsixPath: string, repoRoot: string, omitElectron148 = false
+): Promise<void> {
   const zip = new yazl.ZipFile();
   const hostTag = `${process.platform}-${process.arch}-${process.versions.modules}`;
   const hostBinary = path.join(
@@ -29,6 +31,9 @@ async function writeSyntheticVsix(vsixPath: string, repoRoot: string): Promise<v
   const fallback = Buffer.from([1]);
 
   for (const tag of matrix.expectedElectronTags()) {
+    if (omitElectron148 && tag.endsWith('-148')) {
+      continue;
+    }
     zip.addBuffer(
       fallback,
       `extension/native/${tag}/${matrix.NATIVE_BINARY_NAME}`
@@ -78,11 +83,22 @@ async function main(): Promise<void> {
       { encoding: 'utf8', cwd: repoRoot }
     );
     assert.strictEqual(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /Validated 24 native binaries and 7 MCP\/CLI runtime entries/);
+    assert.match(result.stdout, /Validated 28 native binaries and 7 MCP\/CLI runtime entries/);
     if (matrix.expectedNodeTags().includes(
       `${process.platform}-${process.arch}-${process.versions.modules}`
     )) {
       assert.match(result.stdout, /Loaded packaged Node native binding/);
+    }
+    const oldVsixPath = path.join(tmpDir, 'missing-electron-148.vsix');
+    await writeSyntheticVsix(oldVsixPath, repoRoot, true);
+    const oldResult = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'scripts', 'validate-vsix-native.js'), oldVsixPath],
+      { encoding: 'utf8', cwd: repoRoot }
+    );
+    assert.notStrictEqual(oldResult.status, 0, 'A package missing ABI 148 must fail validation');
+    for (const tag of ['darwin-arm64-148', 'darwin-x64-148', 'linux-x64-148', 'win32-x64-148']) {
+      assert.ok(oldResult.stderr.includes(`missing: extension/native/${tag}/better_sqlite3.node`));
     }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

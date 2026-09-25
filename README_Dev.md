@@ -610,7 +610,7 @@ CREATE TABLE tokens (
 
 **5. 语法高亮**: Webview 通过 `postMessage` 获取当前 `colorTheme`，用 `vscode-textmate` 对结果行 tokenize，映射到 CSS class。
 
-**6. native 模块**: `better-sqlite3` 需分别针对 VS Code/Cursor 内置 Electron ABI 与系统 Node ABI 预编译。Electron 产物放在 `native/<platform>-<arch>-<abi>/`；Node 20/22/24 发布矩阵放在 `native-node/<platform>-<arch>-<abi>/`，本地 `scripts/rebuild-node.js` 仍支持当前任意 Node 20+ ABI。发布工作流按平台/ABI 分开构建、合并并验证 24 个必需条目。`vscode:prepublish` **只**跑普通 esbuild，不负责 native；使用 `npm run test:native` 做本机 native/VSIX/CLI 回归。
+**6. native 模块**: `better-sqlite3` 需分别针对 VS Code/Cursor 内置 Electron ABI 与系统 Node ABI 预编译。Electron 产物放在 `native/<platform>-<arch>-<abi>/`；Node 20/22/24 发布矩阵放在 `native-node/<platform>-<arch>-<abi>/`，本地 `scripts/rebuild-node.js` 仍支持当前任意 Node 20+ ABI。Electron 固定包含 37/40/42/43（ABI 136/143/146/148），保留旧 ABI 以兼容现有编辑器；缺少 ABI 148 会导致 Electron 43 扩展宿主无法启动。发布工作流按平台/ABI 分开构建、合并并验证 28 个必需条目，覆盖 Windows x64、Linux x64、macOS arm64/x64；artifact/VSIX 回归测试会拒绝缺少任一平台 ABI 148 的包。跨平台原生加载仍需 CI/对应系统验证。`vscode:prepublish` **只**跑普通 esbuild，不负责 native；使用 `npm run test:native` 做本机 native/VSIX/CLI 回归。
 
 **7. 与 VS Code 内置搜索的关系**: 本插件是**补充**而非替代——提供预索引全文搜索体验；不修改内置 Search 面板。
 

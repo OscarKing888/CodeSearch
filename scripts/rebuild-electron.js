@@ -49,7 +49,8 @@ const CURSOR_ELECTRON_BY_VERSION = {
 const SUPPORTED_ELECTRON_TARGETS = {
   vscode: [
     { label: 'vscode-legacy', electronVersion: '37.7.0' },
-    { label: 'vscode-current', electronVersion: '42.0.0' },
+    { label: 'vscode-42', electronVersion: '42.0.0' },
+    { label: 'vscode-current', electronVersion: '43.0.0' },
   ],
   cursor: [
     { label: 'cursor-current', electronVersion: '40.0.0' },
@@ -241,4 +242,8 @@ function main() {
   console.log('Electron rebuild complete.');
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { supportedTargetsFor };

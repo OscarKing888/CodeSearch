@@ -10,7 +10,7 @@ const RELEASE_TARGETS = Object.freeze([
   Object.freeze({ platform: 'darwin', arch: 'x64' }),
 ]);
 
-const ELECTRON_ABIS = Object.freeze(['136', '143', '146']);
+const ELECTRON_ABIS = Object.freeze(['136', '143', '146', '148']);
 
 const NODE_RUNTIMES = Object.freeze([
   Object.freeze({ major: '20', abi: '115' }),
