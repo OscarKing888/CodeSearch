@@ -29,9 +29,13 @@ Version bump (same as `bump-version.bat`):
 Version bumps automatically commit only `package.json`, `package-lock.json`, and `CHANGELOG.md`
 with the message `chore: bump version to X.Y.Z`, preserving unrelated staged work. Uncommitted
 changes in those files stop the script before writes. If a Git commit fails, the updated files
-remain available for a manual commit after fixing the Git error. Use `--no-commit` for the
-previous files-only behavior, including source archives without Git. The script does not tag,
-build, push, or publish. Regression check: `node test/bumpVersion.test.js`.
+remain available for a manual commit after fixing the Git error. The script then creates a local
+annotated tag `vX.Y.Z` on the version commit, with the message `Release X.Y.Z`. Repeating an already
+tagged version with matching version files keeps the original tag and creates no commit; conflicting
+tags stop the script before writes. Tag failures keep the version commit; fix the Git error and rerun
+the same version to create its missing tag. Use `--no-tag` for commits without tagging, or `--no-commit`
+to skip both the commit and tag (including source archives without Git). The script does not build,
+push, or publish. Regression check: `node test/bumpVersion.test.js`.
 
 ### Manual commands
 

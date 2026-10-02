@@ -33,6 +33,7 @@ function fixture(name, repository = true) {
     git(root, 'config', 'user.name', 'Version Test');
     git(root, 'config', 'user.email', 'version-test@example.invalid');
     git(root, 'config', 'commit.gpgsign', 'false');
+    git(root, 'config', 'tag.gpgsign', 'false');
     git(root, 'config', 'core.hooksPath', path.join(root, 'no-hooks'));
     git(root, 'add', '--', 'scripts/bump-version.js', ...versionFiles, 'unrelated.txt');
     git(root, 'commit', '-m', 'Initial fixture');
@@ -70,6 +71,9 @@ try {
   assert.strictEqual(git(root, 'log', '-1', '--format=%s'), 'chore: bump version to 1.2.4');
   assert.deepStrictEqual(git(root, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').split('\n').sort(), versionFiles);
   assert.strictEqual(git(root, 'status', '--porcelain'), '');
+  assert.strictEqual(git(root, 'cat-file', '-t', 'refs/tags/v1.2.4'), 'tag');
+  assert.strictEqual(git(root, 'rev-parse', 'v1.2.4^{commit}'), git(root, 'rev-parse', 'HEAD'));
+  assert.strictEqual(git(root, 'for-each-ref', '--format=%(contents:subject)', 'refs/tags/v1.2.4'), 'Release 1.2.4');
 
   fs.writeFileSync(path.join(root, 'unrelated.txt'), 'staged work\n');
   git(root, 'add', '--', 'unrelated.txt');
@@ -80,22 +84,37 @@ try {
   assert.deepStrictEqual(git(root, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').split('\n').sort(), versionFiles);
 
   const head = git(root, 'rev-parse', 'HEAD');
+  const tag = git(root, 'rev-parse', 'refs/tags/v1.2.5');
   expectSuccess(bump(root, '1.2.5'));
   assert.strictEqual(git(root, 'rev-parse', 'HEAD'), head, 'An unchanged version must not create an empty commit');
   assert.strictEqual(git(root, 'diff', '--cached', '--binary'), staged);
+  assert.strictEqual(git(root, 'rev-parse', 'refs/tags/v1.2.5'), tag, 'Repeated bumps must not replace the tag');
 
-  expectSuccess(bump(root, '1.2.6', '--no-commit'));
-  versions(root, '1.2.6');
-  assert.strictEqual(git(root, 'rev-parse', 'HEAD'), head);
-  assert.strictEqual(git(root, 'diff', '--cached', '--binary'), staged);
+  git(root, 'commit', '-m', 'Unrelated change');
+  const laterHead = git(root, 'rev-parse', 'HEAD');
+  expectSuccess(bump(root, '1.2.5'));
+  assert.strictEqual(git(root, 'rev-parse', 'HEAD'), laterHead);
+  assert.strictEqual(git(root, 'rev-parse', 'refs/tags/v1.2.5'), tag, 'Unrelated commits must not move release tags');
+
+  expectSuccess(bump(root, '1.2.6', '--no-tag'));
+  assert.strictEqual(git(root, 'tag', '--list', 'v1.2.6'), '');
+  const untaggedHead = git(root, 'rev-parse', 'HEAD');
+  expectSuccess(bump(root, '1.2.6'));
+  assert.strictEqual(git(root, 'rev-parse', 'HEAD'), untaggedHead, 'Missing tags can be created without another commit');
+  assert.strictEqual(git(root, 'rev-parse', 'v1.2.6^{commit}'), untaggedHead);
+
+  expectSuccess(bump(root, '1.2.7', '--no-commit'));
+  versions(root, '1.2.7');
+  assert.strictEqual(git(root, 'rev-parse', 'HEAD'), untaggedHead);
+  assert.strictEqual(git(root, 'tag', '--list', 'v1.2.7'), '');
   const before = snapshot(root);
-  const dirtyResult = bump(root, '1.2.7');
+  const dirtyResult = bump(root, '1.2.8');
   assert.strictEqual(dirtyResult.status, 1);
   assert.match(dirtyResult.stderr, /already have uncommitted changes/);
   assert.deepStrictEqual(snapshot(root), before, 'Dirty version files must be rejected before writes');
   git(root, 'add', '--', ...versionFiles);
   const dirtyIndex = git(root, 'diff', '--cached', '--binary');
-  assert.strictEqual(bump(root, '1.2.7').status, 1);
+  assert.strictEqual(bump(root, '1.2.8').status, 1);
   assert.deepStrictEqual(snapshot(root), before);
   assert.strictEqual(git(root, 'diff', '--cached', '--binary'), dirtyIndex);
 
@@ -115,6 +134,37 @@ try {
   assert.strictEqual(git(failed, 'rev-parse', 'HEAD'), failedHead);
   versions(failed, '1.2.4');
   assert.ok(git(failed, 'diff', '--name-only'), 'A failed commit must keep version updates');
+  assert.strictEqual(git(failed, 'tag', '--list', 'v1.2.4'), '', 'A failed commit must not create a tag');
+
+  const collision = fixture('tag collision');
+  git(collision, 'tag', '-a', 'v1.2.4', '-m', 'Existing unrelated tag');
+  const originalTag = git(collision, 'rev-parse', 'refs/tags/v1.2.4');
+  const originalHead = git(collision, 'rev-parse', 'HEAD');
+  const originalFiles = snapshot(collision);
+  const collisionResult = bump(collision, '1.2.4');
+  assert.strictEqual(collisionResult.status, 1);
+  assert.match(collisionResult.stderr, /already exists for different version files/);
+  assert.deepStrictEqual(snapshot(collision), originalFiles);
+  assert.strictEqual(git(collision, 'rev-parse', 'HEAD'), originalHead);
+  assert.strictEqual(git(collision, 'rev-parse', 'refs/tags/v1.2.4'), originalTag);
+  assert.strictEqual(bump(collision, '1.2.5-invalid..tag').status, 1);
+  assert.deepStrictEqual(snapshot(collision), originalFiles, 'Invalid tag names must be rejected before writes');
+  assert.strictEqual(git(collision, 'rev-parse', 'HEAD'), originalHead);
+
+  const failedTag = fixture('failed tag');
+  git(failedTag, 'config', 'tag.gpgsign', 'true');
+  git(failedTag, 'config', 'gpg.program', path.join(failedTag, 'missing-gpg'));
+  const tagResult = bump(failedTag, '1.2.4');
+  assert.strictEqual(tagResult.status, 1);
+  assert.match(tagResult.stderr, /commit .* was kept, but creating tag v1\.2\.4 failed/);
+  versions(failedTag, '1.2.4');
+  assert.strictEqual(git(failedTag, 'status', '--porcelain'), '');
+  assert.strictEqual(git(failedTag, 'tag', '--list', 'v1.2.4'), '');
+  const recoveryHead = git(failedTag, 'rev-parse', 'HEAD');
+  git(failedTag, 'config', 'tag.gpgsign', 'false');
+  expectSuccess(bump(failedTag, '1.2.4'));
+  assert.strictEqual(git(failedTag, 'rev-parse', 'HEAD'), recoveryHead);
+  assert.strictEqual(git(failedTag, 'rev-parse', 'v1.2.4^{commit}'), recoveryHead);
 
   console.log('bumpVersion tests passed');
 } finally {

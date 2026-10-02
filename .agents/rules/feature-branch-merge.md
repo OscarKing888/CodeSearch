@@ -98,4 +98,6 @@ CodeSearch 仓库级 Git 协议，沿用 DiskLanded 的本地 worktree、逐功�
 - 版本号、CHANGELOG 与发布 Tag 遵循根目录 `AGENTS.MD` 的 Version bump 和 Release documentation
   约定；不引入 `VERSION` 文件，不移动、删除或覆盖已推送 Tag。
 - 版本升级也按独立功能自动提交：`npm run version:bump -- X.Y.Z` 默认修改并仅提交三个版本文件，
-  不夹带其他暂存内容；显式 `--no-commit` 时由 agent 验证后按明确路径单独提交，无需再问。
+  不夹带其他暂存内容，并在该版本提交上自动创建附注 Tag `vX.Y.Z`，无需再问。
+  显式 `--no-tag` 仅提交不打 Tag；`--no-commit` 仅修改文件。已有同版本且版本文件一致的 Tag
+  保持原样；冲突 Tag 不覆盖、不移动，改用新版本。创建本地 Tag 不等于授权推送或发布。

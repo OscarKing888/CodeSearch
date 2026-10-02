@@ -29,8 +29,11 @@ Version bump (same as `bump-version.bat`):
 版本升级默认自动提交 `package.json`、`package-lock.json` 和 `CHANGELOG.md`，提交信息为
 `chore: bump version to X.Y.Z`，其他已暂存文件不会包含在提交中。三个版本文件已有未提交修改时，
 脚本会在写入前停止；Git 提交失败时保留版本修改，修复 Git 错误后可手动仅提交这三个文件。
-加 `--no-commit` 可使用原来的只修改文件模式（也适用于没有 Git 的源码副本）。脚本不创建 Tag、
-不 build、push 或发布。回归检查：`node test/bumpVersion.test.js`。
+提交后自动在版本提交上创建本地附注 Tag `vX.Y.Z`（信息为 `Release X.Y.Z`）。已有同名 Tag 且
+版本文件一致时重复执行不会新增提交或移动 Tag；Tag 冲突时在修改文件前停止。打 Tag 失败时
+保留版本提交，修复 Git 错误后重跑同一版本即可补建 Tag。
+加 `--no-tag` 可仅自动提交不打 Tag；`--no-commit` 仅修改文件，同时跳过提交和 Tag（也适用于
+没有 Git 的源码副本）。脚本不 build、push 或发布。回归检查：`node test/bumpVersion.test.js`。
 
 ### 手动命令
 

@@ -9,9 +9,10 @@ const CHANGELOG = path.join(ROOT, 'CHANGELOG.md');
 const VERSION_FILES = ['package.json', 'package-lock.json', 'CHANGELOG.md'];
 
 function usage() {
-  console.error('Usage: node scripts/bump-version.js <version> [--date YYYY-MM-DD] [--notes "text"] [--no-commit]');
+  console.error('Usage: node scripts/bump-version.js <version> [--date YYYY-MM-DD] [--notes "text"] [--no-tag] [--no-commit]');
   console.error('Example: node scripts/bump-version.js 0.2.1 --notes "Fix Electron ABI 146 native packaging."');
-  console.error('Updates and commits version files by default; --no-commit only updates files.');
+  console.error('Updates, commits, and creates an annotated version tag by default.');
+  console.error('--no-tag skips the tag; --no-commit skips both the commit and tag.');
 }
 
 function formatLocalDate(date) {
@@ -28,6 +29,7 @@ function parseArgs(argv) {
     date: formatLocalDate(new Date()),
     notes: [],
     commit: true,
+    tag: true,
   };
 
   while (args.length > 0) {
@@ -38,6 +40,8 @@ function parseArgs(argv) {
       options.notes.push(args.shift());
     } else if (flag === '--no-commit') {
       options.commit = false;
+    } else if (flag === '--no-tag') {
+      options.tag = false;
     } else {
       throw new Error(`Unknown argument: ${flag}`);
     }
@@ -56,7 +60,7 @@ function parseArgs(argv) {
     throw new Error(`Invalid date "${options.date}". Expected YYYY-MM-DD.`);
   }
 
-  return { version, ...options };
+  return { version, ...options, tag: options.commit && options.tag };
 }
 
 function readJson(filePath) {
@@ -75,7 +79,7 @@ function git(args) {
   }).trim();
 }
 
-function checkCommitPreconditions() {
+function checkCommitPreconditions(version, tag) {
   try {
     const gitRoot = fs.realpathSync(git(['rev-parse', '--show-toplevel']));
     const scriptRoot = fs.realpathSync(ROOT);
@@ -87,6 +91,18 @@ function checkCommitPreconditions() {
     if (git(['status', '--porcelain', '--untracked-files=all', '--', ...VERSION_FILES])) {
       throw new Error('Version files already have uncommitted changes; commit them first.');
     }
+    const tagName = `v${version}`;
+    if (tag) git(['check-ref-format', `refs/tags/${tagName}`]);
+    if (tag && git(['tag', '--list', tagName])) {
+      // A repeated request may reuse the tag even after unrelated later commits.
+      // Never replace an existing tag or write files for a conflicting release.
+      if (readJson(PACKAGE_JSON).version !== version ||
+          git(['diff', '--name-only', `${tagName}^{commit}`, 'HEAD', '--', ...VERSION_FILES])) {
+        throw new Error(`Version tag ${tagName} already exists for different version files; use a new version.`);
+      }
+      return true;
+    }
+    return false;
   } catch (error) {
     throw new Error(
       `Cannot automatically commit the version bump: ${error.message}\n` +
@@ -98,15 +114,29 @@ function checkCommitPreconditions() {
 function commitVersion(version) {
   if (!git(['diff', '--name-only', '--', ...VERSION_FILES])) {
     console.log('No version changes to commit.');
-    return;
+    return git(['rev-parse', 'HEAD']);
   }
   try {
     // --only commits these working-tree paths without including other staged work.
     console.log(git(['commit', '--only', '-m', `chore: bump version to ${version}`, '--', ...VERSION_FILES]));
+    return git(['rev-parse', 'HEAD']);
   } catch (error) {
     throw new Error(
       `Version files were updated, but the commit failed: ${error.message}\n` +
       'Changes were kept. After fixing the Git error, commit only package.json, package-lock.json, and CHANGELOG.md.'
+    );
+  }
+}
+
+function tagVersion(version, commit) {
+  const tagName = `v${version}`;
+  try {
+    git(['tag', '-a', tagName, commit, '-m', `Release ${version}`]);
+    console.log(`Created annotated tag ${tagName} at ${commit}.`);
+  } catch (error) {
+    throw new Error(
+      `Version commit ${commit} was kept, but creating tag ${tagName} failed: ${error.message}\n` +
+      'Fix the Git error and rerun the same version to create the missing tag. Existing tags are never overwritten.'
     );
   }
 }
@@ -167,16 +197,24 @@ function updateChangelog(version, date, notes) {
 }
 
 function main() {
-  const { version, date, notes, commit } = parseArgs(process.argv.slice(2));
-  if (commit) checkCommitPreconditions();
+  const { version, date, notes, commit, tag } = parseArgs(process.argv.slice(2));
+  if (commit && checkCommitPreconditions(version, tag)) {
+    console.log(`Version ${version} is already committed and tagged as v${version}; no changes needed.`);
+    return;
+  }
   const previous = updatePackageJson(version);
   updatePackageLock(version);
   updateChangelog(version, date, notes.filter(Boolean));
 
   console.log(`Updated version ${previous} -> ${version}`);
   console.log('Updated package.json, package-lock.json, and CHANGELOG.md.');
-  if (commit) commitVersion(version);
-  else console.log('Skipped commit (--no-commit).');
+  if (commit) {
+    const versionCommit = commitVersion(version);
+    if (tag) tagVersion(version, versionCommit);
+    else console.log('Skipped tag (--no-tag).');
+  } else {
+    console.log('Skipped commit and tag (--no-commit).');
+  }
   console.log(`Release tag must be v${version}.`);
 }
 
