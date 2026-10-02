@@ -160,6 +160,11 @@ jobs:
             exit 1
           fi
 
+      - name: Verify CLI and native statement garbage collection
+        run: |
+          npm run build
+          npx ts-node test/nativeCliSmoke.test.ts
+
       - uses: actions/upload-artifact@v6
         with:
           name: node-native-${{ matrix.target.platform }}-${{ matrix.target.arch }}-node${{ matrix.node.version }}

@@ -136,6 +136,8 @@ The guidance prefers indexed MCP tools for code discovery, but requires `rg`/fil
 
 Linux Electron 构建保留 Ubuntu 22.04 运行库基线，并明确使用 Clang 15；GCC 11 无法解析 Electron 43 V8 头文件中的 deprecated/visibility 属性组合。本地 Linux 源码构建可安装 `clang-15` 后执行 `CC=clang-15 CXX=clang++-15 node scripts/rebuild-electron.js all`。编译器覆盖只作用于 Electron CI，Node-native 保持原工具链；测试和打包任务固定为 `ubuntu-24.04`。工具链修改必须经过实际 Linux Electron 构建验证，不能只依赖 macOS 构建。
 
+Node 24 的原生构建仅固定**编译头文件**为 24.18.1（`scripts/native-matrix.js` → `scripts/rebuild-node.js`），运行时仍使用当前 Node 24，产物仍为 ABI 137。24.19 起的 `ObjectWrap` 头文件存在垃圾回收清理钩子回归，可能让 CLI/MCP 在运行中直接崩溃，详见 [Node #65446](https://github.com/nodejs/node/issues/65446)。本地执行 `npm run rebuild:node` / `npm run rebuild:node:detected` 即可重新生成绑定；不需要降级 Node 或更换数据库。`npm run test:native` 增加了由分配压力触发的 Statement GC 子进程测试；发布矩阵在每个平台、Node 20/22/24 产物上传前运行同一测试。Windows/Linux/Intel macOS 仍需实际 CI 验证；取消头文件固定前须验证新旧 Node 24 消费端。
+
 ### 一次性准备
 
 下面是从 0 开始配置 VS Code Marketplace 发布权限的 SOP。只需要做一次；之后发版由 GitHub Actions 读取 `VSCE_PAT` 自动发布。

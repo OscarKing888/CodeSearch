@@ -15,7 +15,9 @@ const ELECTRON_ABIS = Object.freeze(['136', '143', '146', '148']);
 const NODE_RUNTIMES = Object.freeze([
   Object.freeze({ major: '20', abi: '115' }),
   Object.freeze({ major: '22', abi: '127' }),
-  Object.freeze({ major: '24', abi: '137' }),
+  // Node 24.19+ ObjectWrap headers abort during allocation-driven GC (#65446).
+  // Build ABI 137 with pre-regression headers while running on current Node 24.
+  Object.freeze({ major: '24', abi: '137', headersVersion: '24.18.1' }),
 ]);
 
 function makeTag(target, abi) {

@@ -230,13 +230,24 @@ function rebuildCurrentRuntime() {
 
   const runtime = assertSupportedRuntime();
   const targetArch = getTargetArch();
+  const headerVersion =
+    nodeRuntimeForMajor(process.versions.node.split('.')[0])?.headersVersion ||
+    process.versions.node;
   console.log(
     `Rebuilding better-sqlite3 for system Node.js ${process.version} ` +
       `(ABI ${runtime.abi}, ${process.platform}-${targetArch})...`
   );
+  if (headerVersion !== process.versions.node) {
+    console.log(
+      `Using Node ${headerVersion} headers to avoid the Node 24 ObjectWrap GC regression ` +
+        '(https://github.com/nodejs/node/issues/65446); the runtime and ABI stay unchanged.'
+    );
+  }
 
   const buildEnv = {
     ...process.env,
+    npm_config_runtime: 'node',
+    npm_config_target: headerVersion,
     npm_config_arch: targetArch,
     npm_config_target_arch: targetArch,
   };
@@ -244,7 +255,10 @@ function rebuildCurrentRuntime() {
   const nodeGyp = resolveNodeGyp();
   if (nodeGyp) {
     console.log(`Using node-gyp: ${nodeGyp}`);
-    execFileSync(process.execPath, [nodeGyp, 'rebuild', '--release', `--arch=${targetArch}`], {
+    execFileSync(process.execPath, [
+      nodeGyp, 'rebuild', '--release', `--arch=${targetArch}`,
+      `--target=${headerVersion}`,
+    ], {
       stdio: 'inherit',
       cwd: MODULE_DIR,
       env: buildEnv,

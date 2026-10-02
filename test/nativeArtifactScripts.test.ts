@@ -6,7 +6,7 @@ import { spawnSync } from 'child_process';
 
 const matrix = require('../scripts/native-matrix') as {
   ELECTRON_ABIS: string[];
-  NODE_RUNTIMES: Array<{ major: string; abi: string }>;
+  NODE_RUNTIMES: Array<{ major: string; abi: string; headersVersion?: string }>;
   RELEASE_TARGETS: Array<{ platform: string; arch: string }>;
 };
 const { validateNativeArtifacts } = require('../scripts/validate-native-artifacts') as {
@@ -41,6 +41,14 @@ function main(): void {
     );
     assert.deepStrictEqual([...new Set(fixedAbis)].sort(), [...matrix.ELECTRON_ABIS].sort());
     assert.ok(fixedAbis.includes('148'), 'Electron 43 must be in the fixed release targets');
+    for (const runtime of matrix.NODE_RUNTIMES) {
+      if (runtime.headersVersion) {
+        assert.strictEqual(
+          getAbi(runtime.headersVersion, 'node'), runtime.abi,
+          'Pinned build headers must preserve the advertised runtime ABI'
+        );
+      }
+    }
     assert.strictEqual(
       cursorHelperNodePath(
         'C:\\Program Files\\cursor\\resources\\app\\bin\\cursor.cmd',
