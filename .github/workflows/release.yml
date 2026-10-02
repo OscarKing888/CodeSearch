@@ -40,6 +40,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y python3 make g++ libsqlite3-dev
 
       - run: npm ci
+      - run: node test/bumpVersion.test.js
       - run: npm run test:native
       - run: npm test
 

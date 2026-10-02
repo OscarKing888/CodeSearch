@@ -31,7 +31,7 @@ worktree 与唯一 `work/<task>-<短随机id>` 任务分支，按范围验证，
 
 ## Version bump
 
-- Project-owned version locations only: `package.json` top-level, `package-lock.json` top-level + `packages[""].version`, and `CHANGELOG.md` newest heading. Do not edit third-party versions in the lockfile. Prefer `npm run version:bump -- X.Y.Z --notes "..."` (`bump-version.bat` / `./bump-version.sh`); it does not commit, tag, build, or publish. Release tags `vX.Y.Z` must match `package.json`.
+- Project-owned version locations only: `package.json` top-level, `package-lock.json` top-level + `packages[""].version`, and `CHANGELOG.md` newest heading. Do not edit third-party versions in the lockfile. Prefer `npm run version:bump -- X.Y.Z --notes "..."` (`bump-version.bat` / `./bump-version.sh`); it automatically commits only those three files (`chore: bump version to X.Y.Z`), preserving unrelated staged work. Dirty version files are rejected before writes; a failed commit retains updates for recovery. `--no-commit` preserves the files-only mode for archives/no Git or manual commits. It does not tag, build, push, or publish. Release tags `vX.Y.Z` must match `package.json`. Coverage: `node test/bumpVersion.test.js`.
 
 ## MCP server (AI agents)
 

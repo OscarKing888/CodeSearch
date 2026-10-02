@@ -10,6 +10,7 @@ if [[ $# -lt 1 ]]; then
   echo
   echo "Equivalent to:"
   echo "  npm run version:bump -- 0.2.1 --notes \"Fix Electron ABI 146 native packaging.\""
+  echo "Updates and commits version files by default; add --no-commit to only update files."
   exit 1
 fi
 

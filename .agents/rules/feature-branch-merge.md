@@ -97,3 +97,5 @@ CodeSearch 仓库级 Git 协议，沿用 DiskLanded 的本地 worktree、逐功�
 - 本地会话自动提交并合并到本地 `main`，不自动 push；只有用户明确要求推送或发布时才操作远端。
 - 版本号、CHANGELOG 与发布 Tag 遵循根目录 `AGENTS.MD` 的 Version bump 和 Release documentation
   约定；不引入 `VERSION` 文件，不移动、删除或覆盖已推送 Tag。
+- 版本升级也按独立功能自动提交：`npm run version:bump -- X.Y.Z` 默认修改并仅提交三个版本文件，
+  不夹带其他暂存内容；显式 `--no-commit` 时由 agent 验证后按明确路径单独提交，无需再问。

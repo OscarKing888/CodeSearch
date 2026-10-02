@@ -26,6 +26,12 @@ Version bump (same as `bump-version.bat`):
 ./bump-version.sh 0.2.1 --notes "Fix Electron ABI 146 native packaging."
 ```
 
+版本升级默认自动提交 `package.json`、`package-lock.json` 和 `CHANGELOG.md`，提交信息为
+`chore: bump version to X.Y.Z`，其他已暂存文件不会包含在提交中。三个版本文件已有未提交修改时，
+脚本会在写入前停止；Git 提交失败时保留版本修改，修复 Git 错误后可手动仅提交这三个文件。
+加 `--no-commit` 可使用原来的只修改文件模式（也适用于没有 Git 的源码副本）。脚本不创建 Tag、
+不 build、push 或发布。回归检查：`node test/bumpVersion.test.js`。
+
 ### 手动命令
 
 ```bash

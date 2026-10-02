@@ -26,6 +26,13 @@ Version bump (same as `bump-version.bat`):
 ./bump-version.sh 0.2.1 --notes "Fix Electron ABI 146 native packaging."
 ```
 
+Version bumps automatically commit only `package.json`, `package-lock.json`, and `CHANGELOG.md`
+with the message `chore: bump version to X.Y.Z`, preserving unrelated staged work. Uncommitted
+changes in those files stop the script before writes. If a Git commit fails, the updated files
+remain available for a manual commit after fixing the Git error. Use `--no-commit` for the
+previous files-only behavior, including source archives without Git. The script does not tag,
+build, push, or publish. Regression check: `node test/bumpVersion.test.js`.
+
 ### Manual commands
 
 ```bash

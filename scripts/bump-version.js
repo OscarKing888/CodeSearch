@@ -1,14 +1,17 @@
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const PACKAGE_JSON = path.join(ROOT, 'package.json');
 const PACKAGE_LOCK_JSON = path.join(ROOT, 'package-lock.json');
 const CHANGELOG = path.join(ROOT, 'CHANGELOG.md');
+const VERSION_FILES = ['package.json', 'package-lock.json', 'CHANGELOG.md'];
 
 function usage() {
-  console.error('Usage: node scripts/bump-version.js <version> [--date YYYY-MM-DD] [--notes "text"]');
+  console.error('Usage: node scripts/bump-version.js <version> [--date YYYY-MM-DD] [--notes "text"] [--no-commit]');
   console.error('Example: node scripts/bump-version.js 0.2.1 --notes "Fix Electron ABI 146 native packaging."');
+  console.error('Updates and commits version files by default; --no-commit only updates files.');
 }
 
 function formatLocalDate(date) {
@@ -24,6 +27,7 @@ function parseArgs(argv) {
   const options = {
     date: formatLocalDate(new Date()),
     notes: [],
+    commit: true,
   };
 
   while (args.length > 0) {
@@ -32,6 +36,8 @@ function parseArgs(argv) {
       options.date = args.shift();
     } else if (flag === '--notes') {
       options.notes.push(args.shift());
+    } else if (flag === '--no-commit') {
+      options.commit = false;
     } else {
       throw new Error(`Unknown argument: ${flag}`);
     }
@@ -59,6 +65,50 @@ function readJson(filePath) {
 
 function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function git(args) {
+  return execFileSync('git', args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+function checkCommitPreconditions() {
+  try {
+    const gitRoot = fs.realpathSync(git(['rev-parse', '--show-toplevel']));
+    const scriptRoot = fs.realpathSync(ROOT);
+    const normalize = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
+    if (normalize(gitRoot) !== normalize(scriptRoot)) {
+      throw new Error('The script must run from the CodeSearch repository root.');
+    }
+    git(['ls-files', '--error-unmatch', '--', ...VERSION_FILES]);
+    if (git(['status', '--porcelain', '--untracked-files=all', '--', ...VERSION_FILES])) {
+      throw new Error('Version files already have uncommitted changes; commit them first.');
+    }
+  } catch (error) {
+    throw new Error(
+      `Cannot automatically commit the version bump: ${error.message}\n` +
+      'No version files were changed. Use --no-commit for the previous files-only behavior.'
+    );
+  }
+}
+
+function commitVersion(version) {
+  if (!git(['diff', '--name-only', '--', ...VERSION_FILES])) {
+    console.log('No version changes to commit.');
+    return;
+  }
+  try {
+    // --only commits these working-tree paths without including other staged work.
+    console.log(git(['commit', '--only', '-m', `chore: bump version to ${version}`, '--', ...VERSION_FILES]));
+  } catch (error) {
+    throw new Error(
+      `Version files were updated, but the commit failed: ${error.message}\n` +
+      'Changes were kept. After fixing the Git error, commit only package.json, package-lock.json, and CHANGELOG.md.'
+    );
+  }
 }
 
 function updatePackageJson(version) {
@@ -117,14 +167,22 @@ function updateChangelog(version, date, notes) {
 }
 
 function main() {
-  const { version, date, notes } = parseArgs(process.argv.slice(2));
+  const { version, date, notes, commit } = parseArgs(process.argv.slice(2));
+  if (commit) checkCommitPreconditions();
   const previous = updatePackageJson(version);
   updatePackageLock(version);
   updateChangelog(version, date, notes.filter(Boolean));
 
   console.log(`Updated version ${previous} -> ${version}`);
   console.log('Updated package.json, package-lock.json, and CHANGELOG.md.');
+  if (commit) commitVersion(version);
+  else console.log('Skipped commit (--no-commit).');
   console.log(`Release tag must be v${version}.`);
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+}
