@@ -1,5 +1,12 @@
 # Agent Notes
 
+## 功能修改与 Git 流程
+
+每次修改前，遵守 [功能分支、合并与清理规则](.agents/rules/feature-branch-merge.md)：创建会话独立
+worktree 与唯一 `work/<task>-<短随机id>` 任务分支，按范围验证，逐功能自动提交，解决普通冲突后
+自动合并到本地 `main`，并清理本会话临时资源。无需逐次询问提交或本地合并；本地不自动 push。
+规则只在上述文件维护，保留现有专题约定；中文内容保持 UTF-8，命令与代码兼容 macOS、Windows x64。
+
 ## Maintainer rules
 
 - When behavior, a bug-fix approach, or a feature contract changes, update the matching topic section here in the same change (what / why / key files / verification caveat). Prefer concise sections over chronological logs.

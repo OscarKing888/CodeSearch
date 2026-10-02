@@ -1,3 +1,4 @@
+.worktrees/**
 .vscode/**
 .cursor/**
 .agents/**
