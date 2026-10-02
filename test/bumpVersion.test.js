@@ -21,6 +21,7 @@ function fixture(name, repository = true) {
   const root = path.join(temp, name);
   fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'bump-version.js'), path.join(root, 'scripts', 'bump-version.js'));
+  fs.copyFileSync(path.join(__dirname, '..', 'bump-version.sh'), path.join(root, 'bump-version.sh'));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.2.3' }, null, 2) + '\n');
   fs.writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify({
     name: 'fixture', version: '1.2.3', lockfileVersion: 3,
@@ -35,13 +36,27 @@ function fixture(name, repository = true) {
     git(root, 'config', 'commit.gpgsign', 'false');
     git(root, 'config', 'tag.gpgsign', 'false');
     git(root, 'config', 'core.hooksPath', path.join(root, 'no-hooks'));
-    git(root, 'add', '--', 'scripts/bump-version.js', ...versionFiles, 'unrelated.txt');
+    git(root, 'add', '--', 'scripts/bump-version.js', 'bump-version.sh', ...versionFiles, 'unrelated.txt');
     git(root, 'commit', '-m', 'Initial fixture');
+    // A local bare repository stands in for origin so pushes can be verified.
+    git(temp, '-c', 'init.defaultBranch=main', 'init', '--bare', `${name}.git`);
+    git(root, 'remote', 'add', 'origin', path.join(temp, `${name}.git`));
+    git(root, 'push', '-q', 'origin', 'main');
   }
   return root;
 }
 
+function remoteRef(root, ref) {
+  const result = command('git', ['rev-parse', '-q', '--verify', ref], path.join(temp, `${path.basename(root)}.git`));
+  return result.status === 0 ? result.stdout.trim() : '';
+}
+
+// The entry scripts own the commit, tag, and push, so end-to-end checks run through bump-version.sh.
 function bump(root, version, ...options) {
+  return command('bash', [path.join(root, 'bump-version.sh'), version, '--date', '2026-10-02', ...options], root);
+}
+
+function prepare(root, version, ...options) {
   return command(process.execPath, [path.join(root, 'scripts', 'bump-version.js'), version,
     '--date', '2026-10-02', ...options], root);
 }
@@ -74,6 +89,8 @@ try {
   assert.strictEqual(git(root, 'cat-file', '-t', 'refs/tags/v1.2.4'), 'tag');
   assert.strictEqual(git(root, 'rev-parse', 'v1.2.4^{commit}'), git(root, 'rev-parse', 'HEAD'));
   assert.strictEqual(git(root, 'for-each-ref', '--format=%(contents:subject)', 'refs/tags/v1.2.4'), 'Release 1.2.4');
+  assert.strictEqual(remoteRef(root, 'refs/heads/main'), git(root, 'rev-parse', 'HEAD'), 'main must be pushed');
+  assert.strictEqual(remoteRef(root, 'refs/tags/v1.2.4'), git(root, 'rev-parse', 'refs/tags/v1.2.4'), 'The tag must be pushed');
 
   fs.writeFileSync(path.join(root, 'unrelated.txt'), 'staged work\n');
   git(root, 'add', '--', 'unrelated.txt');
@@ -99,9 +116,12 @@ try {
   expectSuccess(bump(root, '1.2.6', '--no-tag'));
   assert.strictEqual(git(root, 'tag', '--list', 'v1.2.6'), '');
   const untaggedHead = git(root, 'rev-parse', 'HEAD');
+  assert.strictEqual(remoteRef(root, 'refs/heads/main'), untaggedHead, '--no-tag still pushes main');
+  assert.strictEqual(remoteRef(root, 'refs/tags/v1.2.6'), '');
   expectSuccess(bump(root, '1.2.6'));
   assert.strictEqual(git(root, 'rev-parse', 'HEAD'), untaggedHead, 'Missing tags can be created without another commit');
   assert.strictEqual(git(root, 'rev-parse', 'v1.2.6^{commit}'), untaggedHead);
+  assert.strictEqual(remoteRef(root, 'refs/tags/v1.2.6'), git(root, 'rev-parse', 'refs/tags/v1.2.6'));
 
   expectSuccess(bump(root, '1.2.7', '--no-commit'));
   versions(root, '1.2.7');
@@ -124,6 +144,60 @@ try {
   assert.deepStrictEqual(snapshot(archive), archiveBefore);
   expectSuccess(bump(archive, '1.2.4', '--no-commit'));
   versions(archive, '1.2.4');
+
+  const direct = fixture('direct script');
+  const directFiles = snapshot(direct);
+  const directResult = prepare(direct, '1.2.4');
+  assert.strictEqual(directResult.status, 1, 'Running the JS directly must not skip the commit silently');
+  assert.match(directResult.stderr, /Run \.\/bump-version\.sh or bump-version\.bat/);
+  assert.deepStrictEqual(snapshot(direct), directFiles);
+  const directPlan = prepare(direct, '1.2.4', '--no-commit');
+  expectSuccess(directPlan);
+  assert.deepStrictEqual(directPlan.stdout.trim().split('\n'),
+    ['version=1.2.4', 'commit=0', 'create_tag=0', 'push=0', 'push_tag=0']);
+  versions(direct, '1.2.4');
+
+  const local = fixture('no push');
+  const remoteHead = remoteRef(local, 'refs/heads/main');
+  expectSuccess(bump(local, '1.2.4', '--no-push'));
+  assert.strictEqual(git(local, 'rev-parse', 'v1.2.4^{commit}'), git(local, 'rev-parse', 'HEAD'));
+  assert.strictEqual(remoteRef(local, 'refs/heads/main'), remoteHead, '--no-push must leave origin unchanged');
+  assert.strictEqual(remoteRef(local, 'refs/tags/v1.2.4'), '');
+  const localHead = git(local, 'rev-parse', 'HEAD');
+  expectSuccess(bump(local, '1.2.4'));
+  assert.strictEqual(git(local, 'rev-parse', 'HEAD'), localHead, 'A later push must not create another commit');
+  assert.strictEqual(remoteRef(local, 'refs/heads/main'), localHead);
+  assert.strictEqual(remoteRef(local, 'refs/tags/v1.2.4'), git(local, 'rev-parse', 'refs/tags/v1.2.4'));
+
+  const branch = fixture('work branch');
+  git(branch, 'switch', '-q', '-c', 'work/feature');
+  const branchFiles = snapshot(branch);
+  const branchResult = bump(branch, '1.2.4');
+  assert.strictEqual(branchResult.status, 1);
+  assert.match(branchResult.stderr, /requires this checkout to be on main/);
+  assert.deepStrictEqual(snapshot(branch), branchFiles, 'A non-main push must be rejected before writes');
+  expectSuccess(bump(branch, '1.2.4', '--no-push'));
+  assert.strictEqual(git(branch, 'rev-parse', 'v1.2.4^{commit}'), git(branch, 'rev-parse', 'HEAD'));
+
+  const rejected = fixture('rejected push');
+  const other = path.join(temp, 'rejected push clone');
+  git(temp, 'clone', '-q', path.join(temp, 'rejected push.git'), other);
+  git(other, 'config', 'user.name', 'Version Test');
+  git(other, 'config', 'user.email', 'version-test@example.invalid');
+  fs.writeFileSync(path.join(other, 'unrelated.txt'), 'remote change\n');
+  git(other, 'commit', '-qam', 'Remote change');
+  git(other, 'push', '-q', 'origin', 'main');
+  const rejectedRemote = remoteRef(rejected, 'refs/heads/main');
+  const rejectedResult = bump(rejected, '1.2.4');
+  assert.strictEqual(rejectedResult.status, 1);
+  assert.match(rejectedResult.stderr, /commit and tag were kept, but pushing to origin failed/);
+  assert.strictEqual(git(rejected, 'rev-parse', 'v1.2.4^{commit}'), git(rejected, 'rev-parse', 'HEAD'));
+  assert.strictEqual(remoteRef(rejected, 'refs/heads/main'), rejectedRemote, 'An atomic push must not update main alone');
+  assert.strictEqual(remoteRef(rejected, 'refs/tags/v1.2.4'), '', 'An atomic push must not publish the tag alone');
+  git(rejected, 'pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main');
+  expectSuccess(bump(rejected, '1.2.4'));
+  assert.strictEqual(remoteRef(rejected, 'refs/heads/main'), git(rejected, 'rev-parse', 'HEAD'));
+  assert.strictEqual(remoteRef(rejected, 'refs/tags/v1.2.4'), git(rejected, 'rev-parse', 'refs/tags/v1.2.4'));
 
   const failed = fixture('failed commit');
   const failedHead = git(failed, 'rev-parse', 'HEAD');

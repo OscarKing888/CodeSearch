@@ -26,16 +26,22 @@ Version bump (same as `bump-version.bat`):
 ./bump-version.sh 0.2.1 --notes "Fix Electron ABI 146 native packaging."
 ```
 
-Version bumps automatically commit only `package.json`, `package-lock.json`, and `CHANGELOG.md`
-with the message `chore: bump version to X.Y.Z`, preserving unrelated staged work. Uncommitted
-changes in those files stop the script before writes. If a Git commit fails, the updated files
-remain available for a manual commit after fixing the Git error. The script then creates a local
-annotated tag `vX.Y.Z` on the version commit, with the message `Release X.Y.Z`. Repeating an already
-tagged version with matching version files keeps the original tag and creates no commit; conflicting
-tags stop the script before writes. Tag failures keep the version commit; fix the Git error and rerun
-the same version to create its missing tag. Use `--no-tag` for commits without tagging, or `--no-commit`
-to skip both the commit and tag (including source archives without Git). The script does not build,
-push, or publish. Regression check: `node test/bumpVersion.test.js`.
+`scripts/bump-version.js` only validates and updates `package.json`, `package-lock.json`, and
+`CHANGELOG.md`. `bump-version.sh` / `.bat` then run plain Git commands: commit only those three files
+(`chore: bump version to X.Y.Z`, preserving unrelated staged work), create the annotated tag `vX.Y.Z`
+(`Release X.Y.Z`) on that commit, and run `git push --atomic origin main vX.Y.Z` so origin receives
+both or neither. Pushing requires the checkout to be on `main`; otherwise the script stops before
+writes. Uncommitted changes in the version files stop the script before writes. If a Git commit
+fails, the updated files remain available for a manual commit after fixing the Git error. Repeating an
+already tagged version with matching version files creates no commit and keeps the tag, only pushing;
+conflicting tags stop the script before writes. Tag failures keep the version commit; rerun the same
+version to create the missing tag. Push failures (for example, new commits on origin/main) keep the
+local commit and tag; merge origin/main into main and rerun the same version to push.
+Use `--no-tag` to commit and push main without a tag, `--no-push` to commit and tag locally only, or
+`--no-commit` to only update files (including source archives without Git). Running
+`node scripts/bump-version.js` or `npm run version:bump` directly supports `--no-commit` only. The pushed
+tag triggers the Release workflow; the script itself does not build. Regression check:
+`node test/bumpVersion.test.js`.
 
 ### Manual commands
 
@@ -244,12 +250,9 @@ References:
 ### Release steps
 
 ```bash
-# 1. Update version in package.json
-# 2. Update CHANGELOG.md
-git add package.json CHANGELOG.md
-git commit -m "chore: bump version to 0.1.8"
-git tag v0.1.8
-git push origin main --tags
+# From a checkout on main: update the version files, commit, tag, and push main with v0.1.8
+./bump-version.sh 0.1.8 --notes "Release notes"
+# Windows: bump-version.bat 0.1.8 --notes "Release notes"
 ```
 
 Tag version must match `package.json` `version` (e.g. tag `v0.1.8` → version `0.1.8`).

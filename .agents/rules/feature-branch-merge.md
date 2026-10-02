@@ -97,7 +97,11 @@ CodeSearch 仓库级 Git 协议，沿用 DiskLanded 的本地 worktree、逐功�
 - 本地会话自动提交并合并到本地 `main`，不自动 push；只有用户明确要求推送或发布时才操作远端。
 - 版本号、CHANGELOG 与发布 Tag 遵循根目录 `AGENTS.MD` 的 Version bump 和 Release documentation
   约定；不引入 `VERSION` 文件，不移动、删除或覆盖已推送 Tag。
-- 版本升级也按独立功能自动提交：`npm run version:bump -- X.Y.Z` 默认修改并仅提交三个版本文件，
-  不夹带其他暂存内容，并在该版本提交上自动创建附注 Tag `vX.Y.Z`，无需再问。
-  显式 `--no-tag` 仅提交不打 Tag；`--no-commit` 仅修改文件。已有同版本且版本文件一致的 Tag
-  保持原样；冲突 Tag 不覆盖、不移动，改用新版本。创建本地 Tag 不等于授权推送或发布。
+- 版本升级也按独立功能自动提交：`./bump-version.sh X.Y.Z` / `bump-version.bat` 默认修改并仅提交
+  三个版本文件，不夹带其他暂存内容，在该版本提交上创建附注 Tag `vX.Y.Z`，再用
+  `git push --atomic origin main vX.Y.Z` 一起推送 `main` 与 Tag。提交、Tag、推送由这两个入口
+  脚本直接用 Git 命令完成，`scripts/bump-version.js` 只校验并修改文件。按用户约定，用户亲自
+  运行该工具时的推送是「本地不自动 push」的例外；agent 不得为推送而代为运行它，需本地验证时用
+  `--no-push`。推送要求所在 checkout 为 `main`。显式 `--no-tag` 提交并推送 `main` 不打 Tag；
+  `--no-commit` 仅修改文件。已有同版本且版本文件一致的 Tag 保持原样；冲突 Tag 不覆盖、不移动，
+  改用新版本。

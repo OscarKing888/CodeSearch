@@ -26,14 +26,20 @@ Version bump (same as `bump-version.bat`):
 ./bump-version.sh 0.2.1 --notes "Fix Electron ABI 146 native packaging."
 ```
 
-版本升级默认自动提交 `package.json`、`package-lock.json` 和 `CHANGELOG.md`，提交信息为
-`chore: bump version to X.Y.Z`，其他已暂存文件不会包含在提交中。三个版本文件已有未提交修改时，
-脚本会在写入前停止；Git 提交失败时保留版本修改，修复 Git 错误后可手动仅提交这三个文件。
-提交后自动在版本提交上创建本地附注 Tag `vX.Y.Z`（信息为 `Release X.Y.Z`）。已有同名 Tag 且
-版本文件一致时重复执行不会新增提交或移动 Tag；Tag 冲突时在修改文件前停止。打 Tag 失败时
-保留版本提交，修复 Git 错误后重跑同一版本即可补建 Tag。
-加 `--no-tag` 可仅自动提交不打 Tag；`--no-commit` 仅修改文件，同时跳过提交和 Tag（也适用于
-没有 Git 的源码副本）。脚本不 build、push 或发布。回归检查：`node test/bumpVersion.test.js`。
+`scripts/bump-version.js` 只校验并修改 `package.json`、`package-lock.json` 和 `CHANGELOG.md`；
+`bump-version.sh` / `.bat` 随后直接用 Git 命令仅提交这三个文件（提交信息
+`chore: bump version to X.Y.Z`，其他已暂存文件不会包含在提交中），在版本提交上创建附注 Tag
+`vX.Y.Z`（信息为 `Release X.Y.Z`），再用 `git push --atomic origin main vX.Y.Z` 一起推送 `main`
+和 Tag（两者要么都成功，要么远端都不变）。推送要求当前 checkout 在 `main`，否则在修改文件前
+停止。三个版本文件已有未提交修改时，脚本会在写入前停止；Git 提交失败时保留版本修改，修复 Git
+错误后可手动仅提交这三个文件。已有同名 Tag 且版本文件一致时重复执行不会新增提交或移动 Tag，
+只补推送；Tag 冲突时在修改文件前停止。打 Tag 失败时保留版本提交，修复后重跑同一版本即可补建
+Tag。推送失败（如远端 `main` 有新提交）保留本地提交和 Tag，把 `origin/main` 合入 `main` 后重跑
+同一版本即可推送。
+加 `--no-tag` 提交并推送 `main` 不打 Tag；`--no-push` 只在本地提交和打 Tag；`--no-commit` 仅修改
+文件，跳过提交、Tag 和推送（也适用于没有 Git 的源码副本）。直接运行 `node scripts/bump-version.js`
+或 `npm run version:bump` 只支持 `--no-commit`。推送 Tag 会触发 Release workflow；脚本本身不 build。
+回归检查：`node test/bumpVersion.test.js`。
 
 ### CI 依赖下载重试
 
@@ -265,12 +271,9 @@ npx vsce login OscarKing888
 ### 发版步骤
 
 ```bash
-# 1. 更新 package.json 中的 version
-# 2. 更新 CHANGELOG.md
-git add package.json CHANGELOG.md
-git commit -m "chore: bump version to 0.1.8"
-git tag v0.1.8
-git push origin main --tags
+# 在检出 main 的 checkout 中：更新版本文件、提交、打 Tag，并一起推送 main 与 v0.1.8
+./bump-version.sh 0.1.8 --notes "本次版本说明"
+# Windows：bump-version.bat 0.1.8 --notes "本次版本说明"
 ```
 
 标签版本须与 `package.json` 的 `version` 一致（如 tag `v0.1.8` 对应 version `0.1.8`）。

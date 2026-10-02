@@ -8,11 +8,21 @@ const PACKAGE_LOCK_JSON = path.join(ROOT, 'package-lock.json');
 const CHANGELOG = path.join(ROOT, 'CHANGELOG.md');
 const VERSION_FILES = ['package.json', 'package-lock.json', 'CHANGELOG.md'];
 
+// bump-version.sh / bump-version.bat set this before running the script. They own the commit,
+// tag, and push via plain git commands; this script validates, updates files, and prints the plan.
+const ENTRY_ENV = 'CODESEARCH_BUMP_ENTRY';
+
 function usage() {
-  console.error('Usage: node scripts/bump-version.js <version> [--date YYYY-MM-DD] [--notes "text"] [--no-tag] [--no-commit]');
-  console.error('Example: node scripts/bump-version.js 0.2.1 --notes "Fix Electron ABI 146 native packaging."');
-  console.error('Updates, commits, and creates an annotated version tag by default.');
-  console.error('--no-tag skips the tag; --no-commit skips both the commit and tag.');
+  console.error('Usage: ./bump-version.sh | bump-version.bat <version> [--date YYYY-MM-DD] [--notes "text"] [--no-tag] [--no-push] [--no-commit]');
+  console.error('Example: ./bump-version.sh 0.2.1 --notes "Fix Electron ABI 146 native packaging."');
+  console.error('Updates, commits, creates an annotated version tag, and pushes main with the tag by default.');
+  console.error('--no-tag skips the tag; --no-push keeps the commit and tag local; --no-commit only updates files.');
+  console.error('Running node scripts/bump-version.js (or npm run version:bump) directly supports --no-commit only.');
+}
+
+// stdout carries only the key=value plan for the entry scripts; messages go to stderr.
+function info(message) {
+  console.error(message);
 }
 
 function formatLocalDate(date) {
@@ -30,6 +40,7 @@ function parseArgs(argv) {
     notes: [],
     commit: true,
     tag: true,
+    push: true,
   };
 
   while (args.length > 0) {
@@ -42,6 +53,8 @@ function parseArgs(argv) {
       options.commit = false;
     } else if (flag === '--no-tag') {
       options.tag = false;
+    } else if (flag === '--no-push') {
+      options.push = false;
     } else {
       throw new Error(`Unknown argument: ${flag}`);
     }
@@ -60,7 +73,7 @@ function parseArgs(argv) {
     throw new Error(`Invalid date "${options.date}". Expected YYYY-MM-DD.`);
   }
 
-  return { version, ...options, tag: options.commit && options.tag };
+  return { version, ...options, tag: options.commit && options.tag, push: options.commit && options.push };
 }
 
 function readJson(filePath) {
@@ -79,7 +92,7 @@ function git(args) {
   }).trim();
 }
 
-function checkCommitPreconditions(version, tag) {
+function checkCommitPreconditions(version, tag, push) {
   try {
     const gitRoot = fs.realpathSync(git(['rev-parse', '--show-toplevel']));
     const scriptRoot = fs.realpathSync(ROOT);
@@ -88,6 +101,10 @@ function checkCommitPreconditions(version, tag) {
       throw new Error('The script must run from the CodeSearch repository root.');
     }
     git(['ls-files', '--error-unmatch', '--', ...VERSION_FILES]);
+    // Releases are pushed as origin/main, so never publish a work branch by accident.
+    if (push && git(['branch', '--show-current']) !== 'main') {
+      throw new Error('Pushing a release requires this checkout to be on main; use --no-push to commit and tag locally.');
+    }
     if (git(['status', '--porcelain', '--untracked-files=all', '--', ...VERSION_FILES])) {
       throw new Error('Version files already have uncommitted changes; commit them first.');
     }
@@ -107,36 +124,6 @@ function checkCommitPreconditions(version, tag) {
     throw new Error(
       `Cannot automatically commit the version bump: ${error.message}\n` +
       'No version files were changed. Use --no-commit for the previous files-only behavior.'
-    );
-  }
-}
-
-function commitVersion(version) {
-  if (!git(['diff', '--name-only', '--', ...VERSION_FILES])) {
-    console.log('No version changes to commit.');
-    return git(['rev-parse', 'HEAD']);
-  }
-  try {
-    // --only commits these working-tree paths without including other staged work.
-    console.log(git(['commit', '--only', '-m', `chore: bump version to ${version}`, '--', ...VERSION_FILES]));
-    return git(['rev-parse', 'HEAD']);
-  } catch (error) {
-    throw new Error(
-      `Version files were updated, but the commit failed: ${error.message}\n` +
-      'Changes were kept. After fixing the Git error, commit only package.json, package-lock.json, and CHANGELOG.md.'
-    );
-  }
-}
-
-function tagVersion(version, commit) {
-  const tagName = `v${version}`;
-  try {
-    git(['tag', '-a', tagName, commit, '-m', `Release ${version}`]);
-    console.log(`Created annotated tag ${tagName} at ${commit}.`);
-  } catch (error) {
-    throw new Error(
-      `Version commit ${commit} was kept, but creating tag ${tagName} failed: ${error.message}\n` +
-      'Fix the Git error and rerun the same version to create the missing tag. Existing tags are never overwritten.'
     );
   }
 }
@@ -177,7 +164,7 @@ function updateChangelog(version, date, notes) {
   const heading = `## [${version}]`;
 
   if (current.includes(heading)) {
-    console.log(`CHANGELOG.md already contains ${heading}; leaving it unchanged.`);
+    info(`CHANGELOG.md already contains ${heading}; leaving it unchanged.`);
     return;
   }
 
@@ -197,29 +184,42 @@ function updateChangelog(version, date, notes) {
 }
 
 function main() {
-  const { version, date, notes, commit, tag } = parseArgs(process.argv.slice(2));
-  if (commit && checkCommitPreconditions(version, tag)) {
-    console.log(`Version ${version} is already committed and tagged as v${version}; no changes needed.`);
-    return;
+  const { version, date, notes, commit, tag, push } = parseArgs(process.argv.slice(2));
+  if (commit && process.env[ENTRY_ENV] !== '1') {
+    throw new Error('Run ./bump-version.sh or bump-version.bat to commit, tag, and push a version; ' +
+      'running this script directly supports --no-commit only. No version files were changed.');
+  }
+  const plan = (needsCommit, createTag) => ({
+    version, commit: needsCommit, create_tag: createTag, push, push_tag: push && tag,
+  });
+  if (commit && checkCommitPreconditions(version, tag, push)) {
+    info(`Version ${version} is already committed and tagged as v${version}; no new commit needed.`);
+    return plan(false, false);
   }
   const previous = updatePackageJson(version);
   updatePackageLock(version);
   updateChangelog(version, date, notes.filter(Boolean));
 
-  console.log(`Updated version ${previous} -> ${version}`);
-  console.log('Updated package.json, package-lock.json, and CHANGELOG.md.');
-  if (commit) {
-    const versionCommit = commitVersion(version);
-    if (tag) tagVersion(version, versionCommit);
-    else console.log('Skipped tag (--no-tag).');
-  } else {
-    console.log('Skipped commit and tag (--no-commit).');
+  info(`Updated version ${previous} -> ${version}`);
+  info('Updated package.json, package-lock.json, and CHANGELOG.md.');
+  if (!commit) {
+    info('Skipped commit, tag, and push (--no-commit).');
+    info(`Release tag must be v${version}.`);
+    return plan(false, false);
   }
-  console.log(`Release tag must be v${version}.`);
+  const needsCommit = Boolean(git(['diff', '--name-only', '--', ...VERSION_FILES]));
+  if (!needsCommit) info('No version changes to commit.');
+  return plan(needsCommit, tag);
+}
+
+function formatPlan(plan) {
+  return Object.entries(plan)
+    .map(([key, value]) => `${key}=${typeof value === 'boolean' ? Number(value) : value}`)
+    .join('\n') + '\n';
 }
 
 try {
-  main();
+  process.stdout.write(formatPlan(main()));
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
