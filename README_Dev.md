@@ -35,6 +35,14 @@ Version bump (same as `bump-version.bat`):
 加 `--no-tag` 可仅自动提交不打 Tag；`--no-commit` 仅修改文件，同时跳过提交和 Tag（也适用于
 没有 Git 的源码副本）。脚本不 build、push 或发布。回归检查：`node test/bumpVersion.test.js`。
 
+### CI 依赖下载重试
+
+Release 的测试、Electron/Node 原生构建及打包 job 通过
+`.github/actions/install-dependencies` 执行 `npm ci`。预编译包、Node 头文件或 registry 的偶发
+下载失败会重试，最多三次，分别等待 5 秒、10 秒。仍使用 lockfile 并执行依赖安装脚本；连续
+失败会保留最后一次退出码并终止 job，不跳过原生构建。回归检查：`node test/ciInstall.test.js`。
+本地模拟检查不能代替各平台 runner 的实际下载、编译及原生加载验证。
+
 ### 手动命令
 
 ```bash
