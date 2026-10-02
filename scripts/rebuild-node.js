@@ -223,6 +223,48 @@ function smokeNativeBinary(nativeBinding, targetArch) {
   console.log(`Loaded staged Node binary successfully with ${process.version}.`);
 }
 
+function resolveHeaderVersion() {
+  return (
+    nodeRuntimeForMajor(process.versions.node.split('.')[0])?.headersVersion ||
+    process.versions.node
+  );
+}
+
+function nodeBuildEnv(targetArch, headerVersion) {
+  return {
+    ...process.env,
+    npm_config_runtime: 'node',
+    npm_config_target: headerVersion,
+    npm_config_arch: targetArch,
+    npm_config_target_arch: targetArch,
+  };
+}
+
+// Download the exact headers rebuildCurrentRuntime() compiles against into the
+// node-gyp cache. node-gyp does not retry downloads, so CI wraps this network-only
+// step in scripts/ci-retry.js; the later compile then reuses the cache offline.
+function prefetchCurrentRuntimeHeaders() {
+  if (!fs.existsSync(MODULE_DIR)) {
+    throw new Error('better-sqlite3 is not installed. Run install.bat first.');
+  }
+  assertSupportedRuntime();
+  const targetArch = getTargetArch();
+  const headerVersion = resolveHeaderVersion();
+  const nodeGyp = resolveNodeGyp();
+  if (!nodeGyp) {
+    console.log('node-gyp not found; the npm rebuild fallback will download headers itself.');
+    return;
+  }
+  console.log(`Prefetching Node ${headerVersion} headers (${process.platform}-${targetArch}) with ${nodeGyp}`);
+  execFileSync(process.execPath, [
+    nodeGyp, 'install', '--ensure', `--arch=${targetArch}`, `--target=${headerVersion}`,
+  ], {
+    stdio: 'inherit',
+    cwd: MODULE_DIR,
+    env: nodeBuildEnv(targetArch, headerVersion),
+  });
+}
+
 function rebuildCurrentRuntime() {
   if (!fs.existsSync(MODULE_DIR)) {
     throw new Error('better-sqlite3 is not installed. Run install.bat first.');
@@ -230,9 +272,7 @@ function rebuildCurrentRuntime() {
 
   const runtime = assertSupportedRuntime();
   const targetArch = getTargetArch();
-  const headerVersion =
-    nodeRuntimeForMajor(process.versions.node.split('.')[0])?.headersVersion ||
-    process.versions.node;
+  const headerVersion = resolveHeaderVersion();
   console.log(
     `Rebuilding better-sqlite3 for system Node.js ${process.version} ` +
       `(ABI ${runtime.abi}, ${process.platform}-${targetArch})...`
@@ -244,13 +284,7 @@ function rebuildCurrentRuntime() {
     );
   }
 
-  const buildEnv = {
-    ...process.env,
-    npm_config_runtime: 'node',
-    npm_config_target: headerVersion,
-    npm_config_arch: targetArch,
-    npm_config_target_arch: targetArch,
-  };
+  const buildEnv = nodeBuildEnv(targetArch, headerVersion);
 
   const nodeGyp = resolveNodeGyp();
   if (nodeGyp) {
@@ -326,7 +360,9 @@ function rebuildDetectedRuntimes() {
 }
 
 function main() {
-  if (process.argv.includes('--all-detected')) {
+  if (process.argv.includes('--prefetch-headers')) {
+    prefetchCurrentRuntimeHeaders();
+  } else if (process.argv.includes('--all-detected')) {
     rebuildDetectedRuntimes();
   } else {
     rebuildCurrentRuntime();

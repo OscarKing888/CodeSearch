@@ -27,6 +27,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -40,8 +41,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y python3 make g++ libsqlite3-dev
 
       - name: Verify dependency install retry behavior
-        run: node test/ciInstall.test.js
+        run: |
+          node test/ciInstall.test.js
+          node test/ciRetry.test.js
       - uses: ./.github/actions/install-dependencies
+      - name: Prefetch Node headers with bounded retries
+        run: node scripts/ci-retry.js -- node scripts/rebuild-node.js --prefetch-headers
       - run: node test/bumpVersion.test.js
       - run: npm run test:native
       - run: npm test
@@ -65,6 +70,7 @@ jobs:
             artifact: electron-native-darwin-x64
             npm_config_arch: x64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -92,8 +98,9 @@ jobs:
       - name: Verify native runner architecture
         run: node -e "if (process.arch !== '${{ matrix.npm_config_arch }}') throw new Error('Expected ${{ matrix.npm_config_arch }} runner, got ' + process.arch)"
 
+      # node-gyp does not retry Electron header downloads; retry the rebuild on failure.
       - name: Rebuild better-sqlite3 for Electron
-        run: node scripts/rebuild-electron.js all
+        run: node scripts/ci-retry.js -- node scripts/rebuild-electron.js all
         env:
           npm_config_arch: ${{ matrix.npm_config_arch }}
           npm_config_target_arch: ${{ matrix.npm_config_arch }}
@@ -130,6 +137,7 @@ jobs:
             platform: darwin
             arch: x64
     runs-on: ${{ matrix.target.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -147,6 +155,12 @@ jobs:
 
       - name: Verify native runner architecture
         run: node -e "if (process.arch !== '${{ matrix.target.arch }}') throw new Error('Expected ${{ matrix.target.arch }} runner, got ' + process.arch)"
+
+      - name: Prefetch Node headers with bounded retries
+        run: node scripts/ci-retry.js -- node scripts/rebuild-node.js --prefetch-headers
+        env:
+          npm_config_arch: ${{ matrix.target.arch }}
+          npm_config_target_arch: ${{ matrix.target.arch }}
 
       - name: Rebuild better-sqlite3 for system Node
         run: node scripts/rebuild-node.js
@@ -179,6 +193,7 @@ jobs:
       - build-electron-native
       - build-node-native
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
